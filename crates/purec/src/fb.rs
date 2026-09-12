@@ -119,3 +119,70 @@ pub fn uptime_ms() -> u64 {
         0
     }
 }
+
+const SYS_WM_HANDLE_POINTER: u64 = 281;
+const SYS_WM_HAS_FOCUS: u64 = 282;
+const SYS_KLOG_SET_SCREEN: u64 = 283;
+const SYS_GOP_BEGIN_COMPOSE: u64 = 284;
+const SYS_GOP_END_COMPOSE: u64 = 285;
+const SYS_WM_REQUEST_REPAINT: u64 = 286;
+const SYS_DESKTOP_REDRAW_TAKE: u64 = 287;
+
+#[repr(C)]
+struct WmPointerRequest {
+    x: i32,
+    y: i32,
+    pressed: u32,
+}
+
+pub fn wm_handle_pointer(x: i32, y: i32, pressed: bool) -> (bool, bool) {
+    let request = WmPointerRequest {
+        x,
+        y,
+        pressed: pressed as u32,
+    };
+    let result = unsafe {
+        super::syscall(
+            SYS_WM_HANDLE_POINTER,
+            &request as *const WmPointerRequest as u64,
+            0,
+            0,
+        )
+    };
+    if result < 0 {
+        return (false, false);
+    }
+    ((result & 1) != 0, (result & 2) != 0)
+}
+
+pub fn wm_has_focus() -> bool {
+    unsafe { super::syscall(SYS_WM_HAS_FOCUS, 0, 0, 0) != 0 }
+}
+
+pub fn klog_set_screen(enabled: bool) {
+    unsafe {
+        super::syscall(SYS_KLOG_SET_SCREEN, enabled as u64, 0, 0);
+    }
+}
+
+pub fn compose_begin() {
+    unsafe {
+        super::syscall(SYS_GOP_BEGIN_COMPOSE, 0, 0, 0);
+    }
+}
+
+pub fn compose_end() {
+    unsafe {
+        super::syscall(SYS_GOP_END_COMPOSE, 0, 0, 0);
+    }
+}
+
+pub fn wm_request_repaint(excluded_pid: u32) {
+    unsafe {
+        super::syscall(SYS_WM_REQUEST_REPAINT, excluded_pid as u64, 0, 0);
+    }
+}
+
+pub fn desktop_redraw_take() -> bool {
+    unsafe { super::syscall(SYS_DESKTOP_REDRAW_TAKE, 0, 0, 0) != 0 }
+}

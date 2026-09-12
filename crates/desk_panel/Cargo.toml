@@ -1,0 +1,8 @@
+[package]
+name = "desk_panel"
+version = "0.1.0"
+edition = "2021"
+description = "FFI to Ring-3 C++ audio panel (cxx/panel/audio_panel.cpp)"
+
+[lib]
+crate-type = ["rlib"]

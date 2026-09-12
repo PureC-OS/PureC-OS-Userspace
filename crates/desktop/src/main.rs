@@ -3,8 +3,11 @@
 
 use desk_apps as apps;
 use desk_display as disp;
+use desk_panel as panel;
 use desk_personal as personal;
 use purec::fb::mouse_get;
+use purec::fb::{compose_begin, compose_end, klog_set_screen, uptime_ms};
+use purec::fb::{desktop_redraw_take, wm_handle_pointer, wm_has_focus, wm_request_repaint};
 use purec::{
     exec, file_close, file_open, reboot, shutdown, sleep_ms, try_get_special, try_getchar, wait,
 };
@@ -45,6 +48,8 @@ static mut POWER_MENU: bool = false;
 static mut DRAGGED_ICON: i8 = -1;
 static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
+static mut LAST_DRAW_MS: u64 = 0;
+static mut LAST_LAUNCH_MS: u64 = 0;
 static mut ICON_MOVED: bool = false;
 
 fn icons() -> &'static mut [Icon; ICON_SLOTS] {
@@ -173,17 +178,29 @@ fn draw_desktop() {
     disp::clear(th.desktop);
     disp::draw_rect(0, 0, w, TOPBAR_HEIGHT, th.titlebar);
     disp::draw_text(12, 8, "PureC OS", th.accent, th.titlebar);
+    panel::draw(w);
     draw_icons();
     draw_power_button();
 }
 
 fn draw_all() {
+    let now = uptime_ms();
+    let last = unsafe { *core::ptr::addr_of!(LAST_DRAW_MS) };
+    if now - last < 33 {
+        return;
+    }
+    unsafe {
+        *core::ptr::addr_of_mut!(LAST_DRAW_MS) = now;
+    }
     disp::begin_update();
+    compose_begin();
     draw_desktop();
     if apps::is_visible() {
         apps::draw();
     }
     draw_power_menu();
+    wm_request_repaint(0);
+    compose_end();
     disp::end_update();
 }
 
@@ -229,6 +246,14 @@ fn reap_detached() {
 }
 
 fn launch(icon: usize) {
+    let now = uptime_ms();
+    let last = unsafe { *core::ptr::addr_of!(LAST_LAUNCH_MS) };
+    if now - last < 500 {
+        return;
+    }
+    unsafe {
+        *core::ptr::addr_of_mut!(LAST_LAUNCH_MS) = now;
+    }
     match icon {
         0 => {
             run_detached("/bin/program/files");
@@ -282,6 +307,19 @@ fn handle_mouse() {
         consumed = true;
         redraw = true;
     }
+    if !consumed {
+        let mut panel_redraw = false;
+        consumed = panel::handle_mouse(
+            mouse.x,
+            mouse.y,
+            mouse.buttons,
+            pressed,
+            released,
+            screen_w(),
+            &mut panel_redraw,
+        );
+        redraw = redraw || panel_redraw;
+    }
     if !consumed && pressed && unsafe { *core::ptr::addr_of!(POWER_MENU) } {
         let menu_x = screen_w() - 158;
         if point_inside(mouse.x, mouse.y, menu_x, 28, 150, 30) {
@@ -297,6 +335,14 @@ fn handle_mouse() {
             redraw = true;
         }
         consumed = true;
+    }
+    if !consumed {
+        let (wm_consumed, focus_changed) =
+            wm_handle_pointer(mouse.x, mouse.y, pressed);
+        consumed = wm_consumed;
+        if focus_changed {
+            draw_all();
+        }
     }
     if !consumed && apps::is_visible() {
         let mut app_redraw = false;
@@ -379,6 +425,9 @@ fn handle_mouse() {
 }
 
 fn handle_keyboard() {
+    if wm_has_focus() {
+        return;
+    }
     loop {
         let c = try_getchar();
         if c < 0 {
@@ -387,15 +436,18 @@ fn handle_keyboard() {
         apps::handle_key(c as u8);
     }
     loop {
-        if try_get_special() < 0 {
+        let key = try_get_special();
+        if key < 0 {
             break;
         }
+        panel::handle_special_key(key as u8);
     }
 }
 
 #[no_mangle]
 #[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
+    klog_set_screen(false);
     purec::write("desktop: Ring-3 desktop starting\n");
     if !disp::is_available() || disp::width() < 320 || disp::height() < 240 {
         purec::write("desktop: no usable framebuffer\n");
@@ -403,6 +455,7 @@ pub extern "C" fn _start() -> ! {
     }
     apps::init();
     personal::poll();
+    panel::init();
     unsafe {
         *core::ptr::addr_of_mut!(INSTALLER_VISIBLE) = !install_present();
     }
@@ -411,6 +464,9 @@ pub extern "C" fn _start() -> ! {
     loop {
         reap_detached();
         if personal::poll() {
+            draw_all();
+        }
+        if desktop_redraw_take() {
             draw_all();
         }
         handle_mouse();

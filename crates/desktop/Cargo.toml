@@ -8,6 +8,7 @@ purec = { path = "../purec" }
 desk_display = { path = "../desk_display" }
 desk_apps = { path = "../desk_apps" }
 desk_personal = { path = "../desk_personal" }
+desk_panel = { path = "../desk_panel" }
 
 [[bin]]
 name = "desktop"

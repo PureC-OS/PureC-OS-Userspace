@@ -6,6 +6,14 @@ LIBPUREC := $(LIB_DIR)/libpurec.a
 LD_SCRIPT := $(CURDIR)/ld/userspace.ld
 
 CARGO ?= cargo
+CXX_USER ?= x86_64-elf-g++
+CC_USER ?= x86_64-elf-gcc
+CXX_OUT_DIR := $(CURDIR)/target/cxx/panel
+PANEL_OBJECTS := $(CXX_OUT_DIR)/audio_panel.o $(CXX_OUT_DIR)/ring3.o
+USER_CXXFLAGS := -g -O2 -ffreestanding -fno-stack-protector -fno-pic \
+	-m64 -mno-red-zone -mcmodel=small -fno-exceptions -fno-rtti
+USER_CFLAGS := -g -O2 -ffreestanding -fno-stack-protector -fno-pic \
+	-m64 -mno-red-zone -mcmodel=small
 TARGET := x86_64-unknown-none
 PROFILE_FLAG := --release
 TARGET_DIR := $(CURDIR)/target
@@ -19,6 +27,8 @@ export RUSTFLAGS := \
 	-C relocation-model=static \
 	-C code-model=small \
 	-C link-arg=-T$(LD_SCRIPT) \
+	-C link-arg=$(CXX_OUT_DIR)/audio_panel.o \
+	-C link-arg=$(CXX_OUT_DIR)/ring3.o \
 	-C link-arg=-L$(LIB_DIR) \
 	-C link-arg=-lpurec
 
@@ -28,8 +38,16 @@ all: install
 libpurec:
 	$(MAKE) -C $(ROOT_DIR)/src/libc
 
-bins: libpurec $(LD_SCRIPT)
+bins: libpurec $(LD_SCRIPT) $(PANEL_OBJECTS)
 	$(CARGO) build $(PROFILE_FLAG) --target $(TARGET)
+
+$(CXX_OUT_DIR)/audio_panel.o: $(CURDIR)/cxx/panel/audio_panel.cpp $(CURDIR)/cxx/panel/audio_panel.h $(CURDIR)/cxx/panel/ring3.h
+	@mkdir -p $(@D)
+	$(CXX_USER) $(USER_CXXFLAGS) -I$(ROOT_DIR)/src/libc/include -c $< -o $@
+
+$(CXX_OUT_DIR)/ring3.o: $(CURDIR)/cxx/panel/ring3.c $(CURDIR)/cxx/panel/ring3.h
+	@mkdir -p $(@D)
+	$(CC_USER) $(USER_CFLAGS) -I$(ROOT_DIR)/src/libc/include -I$(ROOT_DIR)/src -c $< -o $@
 
 install: bins
 	@mkdir -p $(PROGRAM_DIR)
