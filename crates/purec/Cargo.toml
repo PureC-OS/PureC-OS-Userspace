@@ -1,0 +1,9 @@
+[package]
+name = "purec"
+version = "0.1.0"
+edition = "2021"
+description = "Safe wrappers + FFI bindings to libpurec.a (PureC OS userspace libc)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["rlib"]

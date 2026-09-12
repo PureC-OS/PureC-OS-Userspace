@@ -1,6 +1,13 @@
-[package]
-name = "PureC-OS-Userspace"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["crates/purec", "crates/hello", "crates/init"]
+resolver = "2"
 
-[dependencies]
+[workspace.lints.rust]
+unsafe_code = "allow"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
