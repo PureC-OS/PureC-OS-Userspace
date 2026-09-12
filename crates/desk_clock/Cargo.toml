@@ -1,0 +1,12 @@
+[package]
+name = "desk_clock"
+version = "0.1.0"
+edition = "2021"
+description = "Ring-3 port of src/userspace/apps/clock_app.c"
+
+[dependencies]
+desk_display = { path = "../desk_display" }
+desk_datetime = { path = "../desk_datetime" }
+
+[lib]
+crate-type = ["rlib"]

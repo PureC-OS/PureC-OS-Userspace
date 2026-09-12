@@ -1,0 +1,11 @@
+[package]
+name = "desk_display"
+version = "0.1.0"
+edition = "2021"
+description = "Ring-3 port of src/userspace/display.c — cached framebuffer helpers"
+
+[dependencies]
+purec = { path = "../purec" }
+
+[lib]
+crate-type = ["rlib"]

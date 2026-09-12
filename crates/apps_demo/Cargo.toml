@@ -1,0 +1,13 @@
+[package]
+name = "apps_demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+purec = { path = "../purec" }
+desk_display = { path = "../desk_display" }
+desk_apps = { path = "../desk_apps" }
+
+[[bin]]
+name = "apps_demo"
+path = "src/main.rs"

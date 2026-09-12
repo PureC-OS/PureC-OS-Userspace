@@ -1,5 +1,16 @@
 [workspace]
-members = ["crates/purec", "crates/hello", "crates/init"]
+members = [
+    "crates/purec",
+    "crates/hello",
+    "crates/init",
+    "crates/desk_display",
+    "crates/desk_calc",
+    "crates/desk_datetime",
+    "crates/desk_clock",
+    "crates/desk_calendar",
+    "crates/desk_apps",
+    "crates/apps_demo",
+]
 resolver = "2"
 
 [workspace.lints.rust]

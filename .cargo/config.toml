@@ -1,10 +1,5 @@
 [build]
 target = "x86_64-unknown-none"
-
-# Базовые codegen-флаги под PureC OS userspace (совпадают с USER_CFLAGS:
-# -mno-red-zone, -fno-pic, -mcmodel=small). Линкер-скрипт и -L/-l для
-# libpurec.a подставляет userspace/Makefile через RUSTFLAGS, чтобы пути
-# оставались относительными к checkout'у.
 [target.x86_64-unknown-none]
 rustflags = [
     "-C", "no-redzone=yes",
