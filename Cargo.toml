@@ -9,7 +9,9 @@ members = [
     "crates/desk_clock",
     "crates/desk_calendar",
     "crates/desk_apps",
+    "crates/desk_personal",
     "crates/apps_demo",
+    "crates/desktop",
 ]
 resolver = "2"
 

@@ -11,7 +11,7 @@ PROFILE_FLAG := --release
 TARGET_DIR := $(CURDIR)/target
 OUT_DIR := $(TARGET_DIR)/$(TARGET)/release
 
-BINS := hello init apps_demo
+BINS := hello init apps_demo desktop
 STAGED := $(BINS:%=$(OUT_DIR)/%)
 
 export RUSTFLAGS := \
@@ -36,4 +36,5 @@ install: bins
 	cp $(OUT_DIR)/hello $(PROGRAM_DIR)/hello-rs
 	cp $(OUT_DIR)/init $(PROGRAM_DIR)/init-rs
 	cp $(OUT_DIR)/apps_demo $(PROGRAM_DIR)/apps-demo-rs
-	@echo "staged: $(PROGRAM_DIR)/hello-rs $(PROGRAM_DIR)/init-rs $(PROGRAM_DIR)/apps-demo-rs"
+	cp $(OUT_DIR)/desktop $(PROGRAM_DIR)/desktop-rs
+	@echo "staged: $(PROGRAM_DIR)/hello-rs $(PROGRAM_DIR)/init-rs $(PROGRAM_DIR)/apps-demo-rs $(PROGRAM_DIR)/desktop-rs"
