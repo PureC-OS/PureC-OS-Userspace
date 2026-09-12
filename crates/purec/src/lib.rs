@@ -32,6 +32,7 @@ unsafe extern "C" {
     fn pc_reboot();
     fn pc_shutdown();
     fn pc_exit(status: i32) -> !;
+    fn pc_heap_grow(size: u64) -> i64;
 }
 pub mod sys {
     pub const WRITE: u64 = 1;
@@ -268,6 +269,14 @@ pub fn console_disable() {
 }
 pub fn display_clear(color: u32) {
     unsafe { pc_display_clear(color) }
+}
+pub fn heap_grow(bytes: u64) -> Option<*mut u8> {
+    let result = unsafe { pc_heap_grow(bytes) };
+    if result < 0 {
+        None
+    } else {
+        Some(result as *mut u8)
+    }
 }
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {

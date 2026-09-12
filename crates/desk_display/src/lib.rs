@@ -15,6 +15,10 @@ pub fn is_available() -> bool {
 pub fn width() -> u32 {
     cached().map(|info| info.width).unwrap_or(0)
 }
+
+pub fn pitch() -> u32 {
+    cached().map(|info| info.pitch).unwrap_or(0)
+}
 pub fn height() -> u32 {
     cached().map(|info| info.height).unwrap_or(0)
 }

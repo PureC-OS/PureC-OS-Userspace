@@ -122,9 +122,7 @@ pub fn uptime_ms() -> u64 {
 
 const SYS_WM_HANDLE_POINTER: u64 = 281;
 const SYS_WM_HAS_FOCUS: u64 = 282;
-const SYS_KLOG_SET_SCREEN: u64 = 283;
-const SYS_GOP_BEGIN_COMPOSE: u64 = 284;
-const SYS_GOP_END_COMPOSE: u64 = 285;
+const SYS_FB_MAP: u64 = 283;
 const SYS_WM_REQUEST_REPAINT: u64 = 286;
 const SYS_DESKTOP_REDRAW_TAKE: u64 = 287;
 
@@ -159,21 +157,12 @@ pub fn wm_has_focus() -> bool {
     unsafe { super::syscall(SYS_WM_HAS_FOCUS, 0, 0, 0) != 0 }
 }
 
-pub fn klog_set_screen(enabled: bool) {
-    unsafe {
-        super::syscall(SYS_KLOG_SET_SCREEN, enabled as u64, 0, 0);
-    }
-}
-
-pub fn compose_begin() {
-    unsafe {
-        super::syscall(SYS_GOP_BEGIN_COMPOSE, 0, 0, 0);
-    }
-}
-
-pub fn compose_end() {
-    unsafe {
-        super::syscall(SYS_GOP_END_COMPOSE, 0, 0, 0);
+pub fn fb_map() -> Option<*mut u32> {
+    let result = unsafe { super::syscall(SYS_FB_MAP, 0, 0, 0) };
+    if result <= 0 {
+        None
+    } else {
+        Some(result as *mut u32)
     }
 }
 

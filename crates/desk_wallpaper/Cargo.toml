@@ -1,0 +1,11 @@
+[package]
+name = "desk_wallpaper"
+version = "0.1.0"
+edition = "2021"
+description = "Ring-3 port of src/userspace/wallpaper.c — BMP/PPM/PNG decode + blit"
+
+[dependencies]
+purec = { path = "../purec" }
+
+[lib]
+crate-type = ["rlib"]

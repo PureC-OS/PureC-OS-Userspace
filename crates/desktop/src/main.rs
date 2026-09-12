@@ -5,9 +5,10 @@ use desk_apps as apps;
 use desk_display as disp;
 use desk_panel as panel;
 use desk_personal as personal;
+use desk_wallpaper as wallpaper;
 use purec::fb::mouse_get;
-use purec::fb::{compose_begin, compose_end, klog_set_screen, uptime_ms};
-use purec::fb::{desktop_redraw_take, wm_handle_pointer, wm_has_focus, wm_request_repaint};
+use purec::fb::{desktop_redraw_take, fb_map, uptime_ms};
+use purec::fb::{wm_handle_pointer, wm_has_focus, wm_request_repaint};
 use purec::{
     exec, file_close, file_open, reboot, shutdown, sleep_ms, try_get_special, try_getchar, wait,
 };
@@ -50,6 +51,31 @@ static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
 static mut LAST_DRAW_MS: u64 = 0;
 static mut LAST_LAUNCH_MS: u64 = 0;
+static mut FB_PTR: *mut u32 = core::ptr::null_mut();
+static mut WP_PATH: [u8; 128] = [0; 128];
+static mut WP_PATH_LEN: usize = 0;
+static mut WP_SYNCED: bool = false;
+
+fn fb_ptr() -> *mut u32 {
+    unsafe { *core::ptr::addr_of!(FB_PTR) }
+}
+
+fn sync_wallpaper_path() {
+    let mut buf = [0u8; 128];
+    let n = personal::wallpaper_path_copy(&mut buf);
+    unsafe {
+        let cur = &*core::ptr::addr_of!(WP_PATH);
+        let cur_len = *core::ptr::addr_of!(WP_PATH_LEN);
+        if *core::ptr::addr_of!(WP_SYNCED) && cur_len == n && cur[..n] == buf[..n] {
+            return;
+        }
+        let dst = &mut *core::ptr::addr_of_mut!(WP_PATH);
+        dst[..n].copy_from_slice(&buf[..n]);
+        *core::ptr::addr_of_mut!(WP_PATH_LEN) = n;
+        *core::ptr::addr_of_mut!(WP_SYNCED) = true;
+    }
+    wallpaper::set_path(&buf[..n]);
+}
 static mut ICON_MOVED: bool = false;
 
 fn icons() -> &'static mut [Icon; ICON_SLOTS] {
@@ -175,7 +201,9 @@ fn draw_desktop() {
         }
     }
     let th = personal::current_colors();
-    disp::clear(th.desktop);
+    if !wallpaper::draw(fb_ptr(), disp::pitch(), w, h) {
+        disp::clear(th.desktop);
+    }
     disp::draw_rect(0, 0, w, TOPBAR_HEIGHT, th.titlebar);
     disp::draw_text(12, 8, "PureC OS", th.accent, th.titlebar);
     panel::draw(w);
@@ -193,14 +221,12 @@ fn draw_all() {
         *core::ptr::addr_of_mut!(LAST_DRAW_MS) = now;
     }
     disp::begin_update();
-    compose_begin();
     draw_desktop();
     if apps::is_visible() {
         apps::draw();
     }
     draw_power_menu();
     wm_request_repaint(0);
-    compose_end();
     disp::end_update();
 }
 
@@ -447,14 +473,19 @@ fn handle_keyboard() {
 #[no_mangle]
 #[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
-    klog_set_screen(false);
     purec::write("desktop: Ring-3 desktop starting\n");
     if !disp::is_available() || disp::width() < 320 || disp::height() < 240 {
         purec::write("desktop: no usable framebuffer\n");
         purec::exit(1);
     }
+    if let Some(ptr) = fb_map() {
+        unsafe {
+            *core::ptr::addr_of_mut!(FB_PTR) = ptr;
+        }
+    }
     apps::init();
     personal::poll();
+    sync_wallpaper_path();
     panel::init();
     unsafe {
         *core::ptr::addr_of_mut!(INSTALLER_VISIBLE) = !install_present();
@@ -464,6 +495,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         reap_detached();
         if personal::poll() {
+            sync_wallpaper_path();
             draw_all();
         }
         if desktop_redraw_take() {

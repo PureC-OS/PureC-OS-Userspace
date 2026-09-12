@@ -315,3 +315,12 @@ pub fn current_colors() -> Colors {
 pub fn font_size() -> u32 {
     unsafe { (*core::ptr::addr_of!(CURRENT)).font_size }
 }
+
+pub fn wallpaper_path_copy(buf: &mut [u8]) -> usize {
+    unsafe {
+        let cur = &*core::ptr::addr_of!(CURRENT);
+        let n = cur.wallpaper_len.min(buf.len());
+        buf[..n].copy_from_slice(&cur.wallpaper[..n]);
+        n
+    }
+}

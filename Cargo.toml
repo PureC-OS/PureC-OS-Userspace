@@ -11,6 +11,7 @@ members = [
     "crates/desk_apps",
     "crates/desk_personal",
     "crates/desk_panel",
+    "crates/desk_wallpaper",
     "crates/apps_demo",
     "crates/desktop",
 ]
