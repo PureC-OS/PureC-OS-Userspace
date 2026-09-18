@@ -38,7 +38,6 @@ void panel_audio_play_test_sound(void);
 
 #define display_draw_rect panel_draw_rect
 #define display_draw_text_at panel_draw_text
-#define audio_status panel_audio_status
 #define AUDIO_BACKEND_HDA 2
 #define AUDIO_BACKEND_PC_SPEAKER 1
 #define userspace_audio_get_status panel_audio_get_status

@@ -75,7 +75,8 @@ void append_uint(char *buffer, uint32_t *length, uint32_t capacity, uint32_t val
     }
 }
 
-void make_volume_label(char *buffer, uint32_t capacity, const struct audio_status &status) {
+void make_volume_label(char *buffer, uint32_t capacity,
+                       const struct panel_audio_status &status) {
     uint32_t length = 0;
 
     append_text(buffer, &length, capacity, status.muted != 0 ? "Mute " : "Vol ");
@@ -84,7 +85,7 @@ void make_volume_label(char *buffer, uint32_t capacity, const struct audio_statu
 }
 
 void make_device_label(char *buffer, uint32_t capacity,
-                       const struct audio_status &status) {
+                       const struct panel_audio_status &status) {
     uint32_t length = 0;
     append_text(buffer, &length, capacity, "Device ");
     append_uint(buffer, &length, capacity, status.selected_output_device + 1);
@@ -100,7 +101,7 @@ void make_device_label(char *buffer, uint32_t capacity,
     }
 }
 
-const char *backend_label(const struct audio_status &status) {
+const char *backend_label(const struct panel_audio_status &status) {
     if ((status.backend & AUDIO_BACKEND_HDA) != 0) {
         return status.pcm_ready != 0 ? "HDA PCM" : "HDA found";
     }
@@ -143,7 +144,7 @@ extern "C" void audio_panel_init(void) {
 }
 
 extern "C" void audio_panel_draw(uint32_t screen_width) {
-    struct audio_status status {};
+    struct panel_audio_status status {};
     char label[18] {};
     char device_label[28] {};
     uint32_t bx = badge_x(screen_width);
@@ -228,7 +229,7 @@ extern "C" bool audio_panel_handle_mouse(
     if (popup_visible && pressed && point_inside(x, y, px + 12, 98, 172, 26)) {
         uint32_t count = 0;
         uint32_t selected = 0;
-        struct audio_status status {};
+        struct panel_audio_status status {};
         if (userspace_audio_get_status(&status)) {
             count = status.output_device_count;
             selected = status.selected_output_device;
