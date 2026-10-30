@@ -258,7 +258,10 @@ fn reap_detached() {
     }
     if finished {
         entries::set_installer_visible(!install_present());
+        disp::invalidate();
         draw_all();
+        taskbar::poll();
+        wm_request_repaint(0);
     }
 }
 
