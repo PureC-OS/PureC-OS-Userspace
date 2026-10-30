@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Desktop RS
+Exec=/bin/program/desktop-rs
+IconColor=0xB7410E
+IconText=RS
+Type=Application

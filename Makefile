@@ -30,7 +30,7 @@ export RUSTFLAGS := \
 	-C link-arg=$(CXX_OUT_DIR)/audio_panel.o \
 	-C link-arg=$(CXX_OUT_DIR)/ring3.o \
 	-C link-arg=-L$(LIB_DIR) \
-	-C link-arg=-lpurec
+	-C link-arg=-l:libpurec.a
 
 .PHONY: all libpurec bins install
 all: install
