@@ -8,7 +8,7 @@ use desk_personal as personal;
 use desk_wallpaper as wallpaper;
 use purec::fb::mouse_get;
 use purec::fb::{desktop_claim, desktop_wait, uptime_ms, WAIT_KEY, WAIT_MOUSE, WAIT_REDRAW};
-use purec::fb::{wm_handle_pointer, wm_has_focus, wm_request_repaint};
+use purec::fb::{wm_has_focus, wm_pointer, wm_request_repaint, wm_set_work_area};
 use purec::{
     exec, file_close, file_open, reboot, shutdown, try_get_special, try_getchar, wait,
 };
@@ -311,9 +311,10 @@ fn handle_mouse() {
     let pressed = (mouse.buttons & 1) != 0 && (prev & 1) == 0;
     let released = (mouse.buttons & 1) == 0 && (prev & 1) != 0;
     let mut redraw = false;
-    let mut consumed = false;
+    let (wm_consumed, _) = wm_pointer(mouse.x, mouse.y, mouse.buttons);
+    let mut consumed = wm_consumed;
 
-    if pressed && point_inside(mouse.x, mouse.y, screen_w() - 38, 3, 30, 22) {
+    if !consumed && pressed && point_inside(mouse.x, mouse.y, screen_w() - 38, 3, 30, 22) {
         unsafe {
             let menu = &mut *core::ptr::addr_of_mut!(POWER_MENU);
             *menu = !*menu;
@@ -349,14 +350,6 @@ fn handle_mouse() {
             redraw = true;
         }
         consumed = true;
-    }
-    if !consumed {
-        let (wm_consumed, focus_changed) =
-            wm_handle_pointer(mouse.x, mouse.y, pressed);
-        consumed = wm_consumed;
-        if focus_changed {
-            draw_all();
-        }
     }
     if !consumed && apps::is_visible() {
         let mut app_redraw = false;
@@ -461,12 +454,19 @@ fn handle_keyboard() {
 const TICK_MS: u64 = 100;
 const SLOW_TICK_MS: u64 = 500;
 
+fn update_work_area() {
+    let w = disp::width();
+    let h = disp::height();
+    wm_set_work_area(0, TOPBAR_HEIGHT, w, h.saturating_sub(TOPBAR_HEIGHT));
+}
+
 fn reload_mode() {
     if disp::refresh_mode() {
         unsafe {
             *core::ptr::addr_of_mut!(LAYOUT_READY) = false;
         }
     }
+    update_work_area();
     disp::invalidate();
     draw_all();
     wm_request_repaint(0);
@@ -484,6 +484,7 @@ pub extern "C" fn _start() -> ! {
         purec::write("desktop: session claim refused (boot with desktop=rs)\n");
         purec::exit(1);
     }
+    update_work_area();
     apps::init();
     personal::poll();
     sync_wallpaper_path();

@@ -71,6 +71,7 @@ const WM_POINTER: u64 = 1;
 const WM_HAS_FOCUS: u64 = 2;
 const WM_REQUEST_REPAINT: u64 = 3;
 const WM_FOCUSED_PID: u64 = 4;
+const WM_SET_WORK_AREA: u64 = 5;
 
 pub fn uptime_ms() -> u64 {
     let mut info = TimeInfo {
@@ -133,9 +134,9 @@ pub fn desktop_wait(timeout_ms: u32) -> u32 {
     }
 }
 
-pub fn wm_handle_pointer(x: i32, y: i32, pressed: bool) -> (bool, bool) {
+pub fn wm_pointer(x: i32, y: i32, buttons: u8) -> (bool, bool) {
     let packed = (x as u32 as u64) | ((y as u32 as u64) << 32);
-    let result = unsafe { super::syscall(SYS_DESKTOP_WM, WM_POINTER, packed, pressed as u64) };
+    let result = unsafe { super::syscall(SYS_DESKTOP_WM, WM_POINTER, packed, buttons as u64) };
     if result < 0 {
         return (false, false);
     }
@@ -149,6 +150,14 @@ pub fn wm_has_focus() -> bool {
 pub fn wm_request_repaint(excluded_pid: u32) {
     unsafe {
         super::syscall(SYS_DESKTOP_WM, WM_REQUEST_REPAINT, excluded_pid as u64, 0);
+    }
+}
+
+pub fn wm_set_work_area(x: u32, y: u32, w: u32, h: u32) {
+    let origin = (x as u64) | ((y as u64) << 32);
+    let size = (w as u64) | ((h as u64) << 32);
+    unsafe {
+        super::syscall(SYS_DESKTOP_WM, WM_SET_WORK_AREA, origin, size);
     }
 }
 
