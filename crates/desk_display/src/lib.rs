@@ -1,42 +1,309 @@
 #![no_std]
-use purec::fb::{self, DisplayInfo};
-static mut CACHED: Option<DisplayInfo> = None;
-fn cached() -> Option<DisplayInfo> {
-    unsafe {
-        if (*core::ptr::addr_of!(CACHED)).is_none() {
-            *core::ptr::addr_of_mut!(CACHED) = fb::display_info();
-        }
-        *core::ptr::addr_of!(CACHED)
-    }
-}
-pub fn is_available() -> bool {
-    cached().is_some_and(|info| info.available)
-}
-pub fn width() -> u32 {
-    cached().map(|info| info.width).unwrap_or(0)
+mod font;
+use purec::fb;
+
+const MIN_SIZE: u32 = 8;
+const MAX_SIZE: u32 = 48;
+
+struct Canvas {
+    buf: *mut u32,
+    shown: *mut u32,
+    force: bool,
+    capacity: usize,
+    width: u32,
+    height: u32,
+    dirty_x0: u32,
+    dirty_y0: u32,
+    dirty_x1: u32,
+    dirty_y1: u32,
+    depth: u32,
+    face: u32,
 }
 
-pub fn pitch() -> u32 {
-    cached().map(|info| info.pitch).unwrap_or(0)
+static mut CANVAS: Canvas = Canvas {
+    buf: core::ptr::null_mut(),
+    shown: core::ptr::null_mut(),
+    force: true,
+    capacity: 0,
+    width: 0,
+    height: 0,
+    dirty_x0: 0,
+    dirty_y0: 0,
+    dirty_x1: 0,
+    dirty_y1: 0,
+    depth: 0,
+    face: 1,
+};
+
+fn canvas() -> &'static mut Canvas {
+    unsafe { &mut *core::ptr::addr_of_mut!(CANVAS) }
+}
+
+impl Canvas {
+    fn mark(&mut self, x0: u32, y0: u32, x1: u32, y1: u32) {
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        if self.dirty_x0 >= self.dirty_x1 {
+            self.dirty_x0 = x0;
+            self.dirty_y0 = y0;
+            self.dirty_x1 = x1;
+            self.dirty_y1 = y1;
+            return;
+        }
+        self.dirty_x0 = self.dirty_x0.min(x0);
+        self.dirty_y0 = self.dirty_y0.min(y0);
+        self.dirty_x1 = self.dirty_x1.max(x1);
+        self.dirty_y1 = self.dirty_y1.max(y1);
+    }
+
+    fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
+        if self.buf.is_null() || x >= self.width || y >= self.height {
+            return;
+        }
+        let x1 = x.saturating_add(w).min(self.width);
+        let y1 = y.saturating_add(h).min(self.height);
+        if x1 <= x || y1 <= y {
+            return;
+        }
+        let stride = self.width as usize;
+        for row in y..y1 {
+            let start = row as usize * stride + x as usize;
+            let line = unsafe {
+                core::slice::from_raw_parts_mut(self.buf.add(start), (x1 - x) as usize)
+            };
+            line.fill(color);
+        }
+        self.mark(x, y, x1, y1);
+    }
+
+    fn glyph_bits(&self, ch: u8, row: u32) -> u8 {
+        let ch = (ch & 0x7F) as usize;
+        match self.face {
+            2 => {
+                let bits = font::CLASSIC[ch][(row & 7) as usize];
+                bits | (bits >> 1)
+            }
+            1 => {
+                if row >= 7 {
+                    0
+                } else {
+                    font::CLEAN[ch][row as usize] << 2
+                }
+            }
+            _ => font::CLASSIC[ch][(row & 7) as usize],
+        }
+    }
+
+    fn text(&mut self, x: u32, y: u32, text: &str, fg: u32, bg: u32, size: u32) {
+        let size = size.clamp(MIN_SIZE, MAX_SIZE);
+        let bytes = text.as_bytes();
+        if bytes.is_empty() {
+            return;
+        }
+        self.fill(x, y, bytes.len() as u32 * size, size, bg);
+        for (index, &byte) in bytes.iter().enumerate() {
+            if byte >= 128 {
+                continue;
+            }
+            let gx = x + index as u32 * size;
+            for row in 0..8u32 {
+                let bits = self.glyph_bits(byte, row);
+                if bits == 0 {
+                    continue;
+                }
+                let y0 = y + row * size / 8;
+                let y1 = y + (row + 1) * size / 8;
+                if y1 <= y0 {
+                    continue;
+                }
+                let mut run_start = 0u32;
+                let mut in_run = false;
+                for col in 0..=8u32 {
+                    let set = col < 8 && (bits & (1u8 << (7 - col))) != 0;
+                    if set && !in_run {
+                        run_start = col;
+                        in_run = true;
+                    }
+                    if (!set || col == 8) && in_run {
+                        let x0 = gx + run_start * size / 8;
+                        let x1 = gx + col * size / 8;
+                        if x1 > x0 {
+                            self.fill(x0, y0, x1 - x0, y1 - y0, fg);
+                        }
+                        in_run = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn pages(bytes: usize) -> u64 {
+    (bytes.div_ceil(4096) * 4096) as u64
+}
+
+pub fn init() -> bool {
+    let info = match fb::display_info() {
+        Some(info) if info.available && info.width != 0 && info.height != 0 => info,
+        _ => return false,
+    };
+    let c = canvas();
+    let need = info.width as usize * info.height as usize;
+    if c.buf.is_null() || need > c.capacity {
+        let bytes = pages(need * 4);
+        let first = purec::heap_grow(bytes);
+        let second = purec::heap_grow(bytes);
+        match (first, second) {
+            (Some(a), Some(b)) => {
+                c.buf = a as *mut u32;
+                c.shown = b as *mut u32;
+                c.capacity = need;
+            }
+            _ => return false,
+        }
+    }
+    c.force = true;
+    c.width = info.width;
+    c.height = info.height;
+    c.dirty_x0 = 0;
+    c.dirty_y0 = 0;
+    c.dirty_x1 = 0;
+    c.dirty_y1 = 0;
+    true
+}
+
+pub fn refresh_mode() -> bool {
+    let c = canvas();
+    let (w, h) = (c.width, c.height);
+    if !init() {
+        return false;
+    }
+    c.width != w || c.height != h
+}
+
+pub fn is_available() -> bool {
+    !canvas().buf.is_null()
+}
+pub fn width() -> u32 {
+    canvas().width
 }
 pub fn height() -> u32 {
-    cached().map(|info| info.height).unwrap_or(0)
+    canvas().height
+}
+pub fn pitch() -> u32 {
+    canvas().width
+}
+pub fn buffer() -> *mut u32 {
+    canvas().buf
+}
+pub fn set_font_face(face: u32) {
+    canvas().face = face;
 }
 pub fn draw_text(x: u32, y: u32, text: &str, fg: u32, bg: u32) {
-    fb::draw_text(x, y, text, fg, bg);
+    canvas().text(x, y, text, fg, bg, MIN_SIZE);
 }
 pub fn draw_text_sized(x: u32, y: u32, text: &str, fg: u32, bg: u32, size: u32) {
-    fb::draw_text_sized(x, y, text, fg, bg, size);
+    canvas().text(x, y, text, fg, bg, size);
 }
 pub fn draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
-    fb::draw_rect(x, y, w, h, color);
+    canvas().fill(x, y, w, h, color);
 }
 pub fn clear(color: u32) {
-    purec::display_clear(color);
+    let c = canvas();
+    let (w, h) = (c.width, c.height);
+    c.fill(0, 0, w, h, color);
+}
+pub fn mark_dirty(x: u32, y: u32, w: u32, h: u32) {
+    let c = canvas();
+    let x1 = x.saturating_add(w).min(c.width);
+    let y1 = y.saturating_add(h).min(c.height);
+    c.mark(x, y, x1, y1);
+}
+pub fn mark_all_dirty() {
+    let c = canvas();
+    let (w, h) = (c.width, c.height);
+    c.mark(0, 0, w, h);
 }
 pub fn begin_update() {
-    fb::display_begin_update();
+    canvas().depth += 1;
 }
 pub fn end_update() {
-    fb::display_end_update();
+    let c = canvas();
+    if c.depth > 0 {
+        c.depth -= 1;
+    }
+    if c.depth == 0 {
+        flush();
+    }
+}
+pub fn invalidate() {
+    let c = canvas();
+    c.force = true;
+    let (w, h) = (c.width, c.height);
+    c.mark(0, 0, w, h);
+}
+
+pub fn flush() {
+    let c = canvas();
+    if c.buf.is_null() || c.dirty_x0 >= c.dirty_x1 || c.dirty_y0 >= c.dirty_y1 {
+        return;
+    }
+    let stride = c.width as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (c.dirty_x0, c.dirty_y0, c.dirty_x1, c.dirty_y1);
+    c.dirty_x0 = 0;
+    c.dirty_y0 = 0;
+    c.dirty_x1 = 0;
+    c.dirty_y1 = 0;
+    if c.force {
+        c.force = false;
+        x0 = 0;
+        y0 = 0;
+        x1 = c.width;
+        y1 = c.height;
+    } else {
+        let mut min_x = u32::MAX;
+        let mut max_x = 0u32;
+        let mut min_y = u32::MAX;
+        let mut max_y = 0u32;
+        for row in y0..y1 {
+            let base = row as usize * stride;
+            let new = unsafe {
+                core::slice::from_raw_parts(c.buf.add(base + x0 as usize), (x1 - x0) as usize)
+            };
+            let old = unsafe {
+                core::slice::from_raw_parts(c.shown.add(base + x0 as usize), (x1 - x0) as usize)
+            };
+            if new == old {
+                continue;
+            }
+            let mut left = 0usize;
+            while new[left] == old[left] {
+                left += 1;
+            }
+            let mut right = new.len() - 1;
+            while new[right] == old[right] {
+                right -= 1;
+            }
+            min_x = min_x.min(x0 + left as u32);
+            max_x = max_x.max(x0 + right as u32 + 1);
+            min_y = min_y.min(row);
+            max_y = row + 1;
+        }
+        if min_x == u32::MAX {
+            return;
+        }
+        x0 = min_x;
+        x1 = max_x;
+        y0 = min_y;
+        y1 = max_y;
+    }
+    for row in y0..y1 {
+        let base = row as usize * stride + x0 as usize;
+        unsafe {
+            core::ptr::copy_nonoverlapping(c.buf.add(base), c.shown.add(base), (x1 - x0) as usize);
+        }
+    }
+    let origin = unsafe { c.buf.add(y0 as usize * stride + x0 as usize) };
+    fb::desktop_blit(origin, c.width, x0, y0, x1 - x0, y1 - y0);
 }

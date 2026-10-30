@@ -1,20 +1,6 @@
-use core::ffi::c_char;
 unsafe extern "C" {
-    fn pc_draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32);
-    fn pc_draw_text(x: u32, y: u32, text: *const c_char, fg: u32, bg: u32);
-    fn pc_draw_text_sized(
-        x: u32,
-        y: u32,
-        text: *const c_char,
-        fg: u32,
-        bg: u32,
-        size: u32,
-    );
     fn pc_display_get_info(info: *mut DisplayInfo) -> bool;
-    fn pc_display_begin_update();
-    fn pc_display_end_update();
     fn pc_mouse_get(state: *mut MouseState) -> bool;
-    fn pc_cpu_info(info: *mut CpuInfo) -> bool;
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -35,50 +21,17 @@ pub struct MouseState {
     pub dy: i32,
     pub buttons: u8,
     pub has_data: bool,
+    pub wheel: i32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct CpuInfo {
-    pub name: [c_char; 49],
-    pub logical_processors: u32,
-    pub usage_percent: u32,
-    pub frequency_hz: u64,
-    pub uptime_ms: u64,
-}
-impl CpuInfo {
-    const fn zero() -> Self {
-        Self {
-            name: [0; 49],
-            logical_processors: 0,
-            usage_percent: 0,
-            frequency_hz: 0,
-            uptime_ms: 0,
-        }
-    }
-}
-fn with_cstr<const N: usize>(s: &str, f: impl FnOnce(*const c_char)) {
-    let mut buf = [0 as c_char; N];
-    let bytes = s.as_bytes();
-    let n = bytes.len().min(N - 1);
-    let mut i = 0;
-    while i < n {
-        buf[i] = bytes[i] as c_char;
-        i += 1;
-    }
-    buf[n] = 0;
-    f(buf.as_ptr());
-}
-#[inline]
-pub fn draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
-    unsafe { pc_draw_rect(x, y, w, h, color) }
-}
-pub fn draw_text(x: u32, y: u32, text: &str, fg: u32, bg: u32) {
-    with_cstr::<256>(text, |ptr| unsafe { pc_draw_text(x, y, ptr, fg, bg) });
-}
-pub fn draw_text_sized(x: u32, y: u32, text: &str, fg: u32, bg: u32, size: u32) {
-    with_cstr::<256>(text, |ptr| unsafe {
-        pc_draw_text_sized(x, y, ptr, fg, bg, size)
-    });
+struct TimeInfo {
+    unix_seconds: i64,
+    millis: u32,
+    tz_minutes: i32,
+    uptime_ms: u64,
+    source: u32,
+    reserved: u32,
 }
 pub fn display_info() -> Option<DisplayInfo> {
     let mut info = DisplayInfo {
@@ -95,14 +48,6 @@ pub fn display_info() -> Option<DisplayInfo> {
         None
     }
 }
-#[inline]
-pub fn display_begin_update() {
-    unsafe { pc_display_begin_update() }
-}
-#[inline]
-pub fn display_end_update() {
-    unsafe { pc_display_end_update() }
-}
 pub fn mouse_get() -> Option<MouseState> {
     let mut state = MouseState::default();
     if unsafe { pc_mouse_get(&mut state) } {
@@ -111,42 +56,86 @@ pub fn mouse_get() -> Option<MouseState> {
         None
     }
 }
+
+const SYS_TIME_GET: u64 = 319;
+const SYS_DESKTOP_CLAIM: u64 = 346;
+const SYS_DESKTOP_BLIT: u64 = 347;
+const SYS_DESKTOP_WAIT: u64 = 348;
+const SYS_DESKTOP_WM: u64 = 349;
+
+pub const WAIT_MOUSE: u32 = 1;
+pub const WAIT_KEY: u32 = 2;
+pub const WAIT_REDRAW: u32 = 4;
+
+const WM_POINTER: u64 = 1;
+const WM_HAS_FOCUS: u64 = 2;
+const WM_REQUEST_REPAINT: u64 = 3;
+const WM_FOCUSED_PID: u64 = 4;
+
 pub fn uptime_ms() -> u64 {
-    let mut info = CpuInfo::zero();
-    if unsafe { pc_cpu_info(&mut info) } {
-        info.uptime_ms
-    } else {
+    let mut info = TimeInfo {
+        unix_seconds: 0,
+        millis: 0,
+        tz_minutes: 0,
+        uptime_ms: 0,
+        source: 0,
+        reserved: 0,
+    };
+    let result = unsafe { super::syscall(SYS_TIME_GET, &mut info as *mut TimeInfo as u64, 0, 0) };
+    if result < 0 {
         0
+    } else {
+        info.uptime_ms
     }
 }
 
-const SYS_WM_HANDLE_POINTER: u64 = 281;
-const SYS_WM_HAS_FOCUS: u64 = 282;
-const SYS_FB_MAP: u64 = 283;
-const SYS_WM_REQUEST_REPAINT: u64 = 286;
-const SYS_DESKTOP_REDRAW_TAKE: u64 = 287;
-
 #[repr(C)]
-struct WmPointerRequest {
+struct BlitRequest {
+    pixels: u64,
+    stride: u32,
+    width: u32,
+    height: u32,
     x: i32,
     y: i32,
-    pressed: u32,
+    flags: u32,
+}
+
+pub fn desktop_claim() -> bool {
+    unsafe { super::syscall(SYS_DESKTOP_CLAIM, 0, 0, 0) == 0 }
+}
+
+pub fn desktop_blit(pixels: *const u32, stride: u32, x: u32, y: u32, w: u32, h: u32) -> bool {
+    let request = BlitRequest {
+        pixels: pixels as u64,
+        stride,
+        width: w,
+        height: h,
+        x: x as i32,
+        y: y as i32,
+        flags: 0,
+    };
+    unsafe {
+        super::syscall(
+            SYS_DESKTOP_BLIT,
+            &request as *const BlitRequest as u64,
+            0,
+            0,
+        ) == 0
+    }
+}
+
+pub fn desktop_wait(timeout_ms: u32) -> u32 {
+    let result = unsafe { super::syscall(SYS_DESKTOP_WAIT, timeout_ms as u64, 0, 0) };
+    if result < 0 {
+        0
+    } else {
+        result as u32
+    }
 }
 
 pub fn wm_handle_pointer(x: i32, y: i32, pressed: bool) -> (bool, bool) {
-    let request = WmPointerRequest {
-        x,
-        y,
-        pressed: pressed as u32,
-    };
-    let result = unsafe {
-        super::syscall(
-            SYS_WM_HANDLE_POINTER,
-            &request as *const WmPointerRequest as u64,
-            0,
-            0,
-        )
-    };
+    let packed = (x as u32 as u64) | ((y as u32 as u64) << 32);
+    let result = unsafe { super::syscall(SYS_DESKTOP_WM, WM_POINTER, packed, pressed as u64) };
     if result < 0 {
         return (false, false);
     }
@@ -154,24 +143,20 @@ pub fn wm_handle_pointer(x: i32, y: i32, pressed: bool) -> (bool, bool) {
 }
 
 pub fn wm_has_focus() -> bool {
-    unsafe { super::syscall(SYS_WM_HAS_FOCUS, 0, 0, 0) != 0 }
-}
-
-pub fn fb_map() -> Option<*mut u32> {
-    let result = unsafe { super::syscall(SYS_FB_MAP, 0, 0, 0) };
-    if result <= 0 {
-        None
-    } else {
-        Some(result as *mut u32)
-    }
+    unsafe { super::syscall(SYS_DESKTOP_WM, WM_HAS_FOCUS, 0, 0) > 0 }
 }
 
 pub fn wm_request_repaint(excluded_pid: u32) {
     unsafe {
-        super::syscall(SYS_WM_REQUEST_REPAINT, excluded_pid as u64, 0, 0);
+        super::syscall(SYS_DESKTOP_WM, WM_REQUEST_REPAINT, excluded_pid as u64, 0);
     }
 }
 
-pub fn desktop_redraw_take() -> bool {
-    unsafe { super::syscall(SYS_DESKTOP_REDRAW_TAKE, 0, 0, 0) != 0 }
+pub fn wm_focused_pid() -> u32 {
+    let result = unsafe { super::syscall(SYS_DESKTOP_WM, WM_FOCUSED_PID, 0, 0) };
+    if result < 0 {
+        0
+    } else {
+        result as u32
+    }
 }

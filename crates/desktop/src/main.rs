@@ -7,10 +7,10 @@ use desk_panel as panel;
 use desk_personal as personal;
 use desk_wallpaper as wallpaper;
 use purec::fb::mouse_get;
-use purec::fb::{desktop_redraw_take, fb_map, uptime_ms};
+use purec::fb::{desktop_claim, desktop_wait, uptime_ms, WAIT_KEY, WAIT_MOUSE, WAIT_REDRAW};
 use purec::fb::{wm_handle_pointer, wm_has_focus, wm_request_repaint};
 use purec::{
-    exec, file_close, file_open, reboot, shutdown, sleep_ms, try_get_special, try_getchar, wait,
+    exec, file_close, file_open, reboot, shutdown, try_get_special, try_getchar, wait,
 };
 
 const TOPBAR_HEIGHT: u32 = 28;
@@ -49,16 +49,10 @@ static mut POWER_MENU: bool = false;
 static mut DRAGGED_ICON: i8 = -1;
 static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
-static mut LAST_DRAW_MS: u64 = 0;
 static mut LAST_LAUNCH_MS: u64 = 0;
-static mut FB_PTR: *mut u32 = core::ptr::null_mut();
 static mut WP_PATH: [u8; 128] = [0; 128];
 static mut WP_PATH_LEN: usize = 0;
 static mut WP_SYNCED: bool = false;
-
-fn fb_ptr() -> *mut u32 {
-    unsafe { *core::ptr::addr_of!(FB_PTR) }
-}
 
 fn sync_wallpaper_path() {
     let mut buf = [0u8; 128];
@@ -201,7 +195,10 @@ fn draw_desktop() {
         }
     }
     let th = personal::current_colors();
-    if !wallpaper::draw(fb_ptr(), disp::pitch(), w, h) {
+    disp::set_font_face(personal::font_face());
+    if wallpaper::draw(disp::buffer(), disp::pitch(), w, h) {
+        disp::mark_all_dirty();
+    } else {
         disp::clear(th.desktop);
     }
     disp::draw_rect(0, 0, w, TOPBAR_HEIGHT, th.titlebar);
@@ -212,21 +209,12 @@ fn draw_desktop() {
 }
 
 fn draw_all() {
-    let now = uptime_ms();
-    let last = unsafe { *core::ptr::addr_of!(LAST_DRAW_MS) };
-    if now - last < 33 {
-        return;
-    }
-    unsafe {
-        *core::ptr::addr_of_mut!(LAST_DRAW_MS) = now;
-    }
     disp::begin_update();
     draw_desktop();
     if apps::is_visible() {
         apps::draw();
     }
     draw_power_menu();
-    wm_request_repaint(0);
     disp::end_update();
 }
 
@@ -470,18 +458,31 @@ fn handle_keyboard() {
     }
 }
 
+const TICK_MS: u64 = 100;
+const SLOW_TICK_MS: u64 = 500;
+
+fn reload_mode() {
+    if disp::refresh_mode() {
+        unsafe {
+            *core::ptr::addr_of_mut!(LAYOUT_READY) = false;
+        }
+    }
+    disp::invalidate();
+    draw_all();
+    wm_request_repaint(0);
+}
+
 #[no_mangle]
 #[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
     purec::write("desktop: Ring-3 desktop starting\n");
-    if !disp::is_available() || disp::width() < 320 || disp::height() < 240 {
+    if !disp::init() || disp::width() < 320 || disp::height() < 240 {
         purec::write("desktop: no usable framebuffer\n");
         purec::exit(1);
     }
-    if let Some(ptr) = fb_map() {
-        unsafe {
-            *core::ptr::addr_of_mut!(FB_PTR) = ptr;
-        }
+    if !desktop_claim() {
+        purec::write("desktop: session claim refused (boot with desktop=rs)\n");
+        purec::exit(1);
     }
     apps::init();
     personal::poll();
@@ -492,18 +493,33 @@ pub extern "C" fn _start() -> ! {
     }
     run_detached("/bin/program/login");
     draw_all();
+    let mut last_tick = uptime_ms();
+    let mut last_slow = last_tick;
     loop {
-        reap_detached();
-        if personal::poll() {
-            sync_wallpaper_path();
-            draw_all();
+        let events = desktop_wait(50);
+        if events & WAIT_REDRAW != 0 {
+            reload_mode();
         }
-        if desktop_redraw_take() {
-            draw_all();
+        if events & WAIT_MOUSE != 0 {
+            handle_mouse();
         }
-        handle_mouse();
-        handle_keyboard();
-        apps::update();
-        sleep_ms(1);
+        if events & WAIT_KEY != 0 {
+            handle_keyboard();
+        }
+        let now = uptime_ms();
+        if now.wrapping_sub(last_tick) >= TICK_MS {
+            last_tick = now;
+            reap_detached();
+            apps::update();
+            handle_keyboard();
+        }
+        if now.wrapping_sub(last_slow) >= SLOW_TICK_MS {
+            last_slow = now;
+            if personal::poll() {
+                sync_wallpaper_path();
+                draw_all();
+            }
+        }
+        disp::flush();
     }
 }
