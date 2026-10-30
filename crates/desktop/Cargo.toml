@@ -10,6 +10,7 @@ desk_apps = { path = "../desk_apps" }
 desk_personal = { path = "../desk_personal" }
 desk_panel = { path = "../desk_panel" }
 desk_wallpaper = { path = "../desk_wallpaper" }
+desk_datetime = { path = "../desk_datetime" }
 
 [[bin]]
 name = "desktop"

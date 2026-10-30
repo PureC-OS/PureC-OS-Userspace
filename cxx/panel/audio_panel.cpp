@@ -143,26 +143,41 @@ extern "C" void audio_panel_init(void) {
     dragging_slider = false;
 }
 
-extern "C" void audio_panel_draw(uint32_t screen_width) {
-    struct panel_audio_status status {};
-    char label[18] {};
-    char device_label[28] {};
-    uint32_t bx = badge_x(screen_width);
+namespace {
 
+void fetch_status(struct panel_audio_status &status) {
     if (!userspace_audio_get_status(&status)) {
         status.volume = 0;
         status.muted = 1;
         status.output_device_count = 1;
     }
+}
 
+} // namespace
+
+extern "C" void audio_panel_draw_badge(uint32_t screen_width) {
+    struct panel_audio_status status {};
+    char label[18] {};
+    uint32_t bx = badge_x(screen_width);
+
+    fetch_status(status);
     make_volume_label(label, sizeof(label), status);
-    make_device_label(device_label, sizeof(device_label), status);
     display_draw_rect(bx, 3, BadgeWidth, BadgeHeight, popup_visible ? 0x585B70 : PanelBorder);
     display_draw_text_at(bx + 8, 9, label, status.muted != 0 ? MutedText : Text, popup_visible ? 0x585B70 : PanelBorder);
+}
+
+extern "C" void audio_panel_draw_popup(uint32_t screen_width) {
+    struct panel_audio_status status {};
+    char label[18] {};
+    char device_label[28] {};
 
     if (!popup_visible) {
         return;
     }
+
+    fetch_status(status);
+    make_volume_label(label, sizeof(label), status);
+    make_device_label(device_label, sizeof(device_label), status);
 
     uint32_t px = popup_x(screen_width);
     display_draw_rect(px, 28, PopupWidth, PopupHeight, PanelBorder);
@@ -177,6 +192,26 @@ extern "C" void audio_panel_draw(uint32_t screen_width) {
     display_draw_text_at(px + 24, 141, status.muted != 0 ? "Unmute" : "Mute", Text, status.muted != 0 ? Warn : PanelBorder);
     display_draw_rect(px + 104, 132, 80, 26, Accent);
     display_draw_text_at(px + 116, 141, "Test", 0x1E1E2E, Accent);
+}
+
+extern "C" void audio_panel_draw(uint32_t screen_width) {
+    audio_panel_draw_badge(screen_width);
+    audio_panel_draw_popup(screen_width);
+}
+
+extern "C" void audio_panel_popup_rect(uint32_t screen_width, uint32_t *x,
+                                       uint32_t *y, uint32_t *w, uint32_t *h) {
+    *x = popup_x(screen_width);
+    *y = 28;
+    *w = PopupWidth;
+    *h = PopupHeight;
+}
+
+extern "C" void audio_panel_set_popup(bool visible) {
+    popup_visible = visible;
+    if (!visible) {
+        dragging_slider = false;
+    }
 }
 
 extern "C" bool audio_panel_handle_mouse(

@@ -9,6 +9,11 @@ extern "C" {
 
 void audio_panel_init(void);
 void audio_panel_draw(uint32_t screen_width);
+void audio_panel_draw_badge(uint32_t screen_width);
+void audio_panel_draw_popup(uint32_t screen_width);
+void audio_panel_popup_rect(uint32_t screen_width, uint32_t *x, uint32_t *y,
+                            uint32_t *w, uint32_t *h);
+void audio_panel_set_popup(bool visible);
 bool audio_panel_handle_mouse(
     int32_t x,
     int32_t y,

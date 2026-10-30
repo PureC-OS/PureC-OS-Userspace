@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+mod entries;
+mod taskbar;
+
 use desk_apps as apps;
 use desk_display as disp;
 use desk_panel as panel;
@@ -12,47 +15,55 @@ use purec::fb::{wm_has_focus, wm_pointer, wm_request_repaint, wm_set_work_area};
 use purec::{
     exec, file_close, file_open, reboot, shutdown, try_get_special, try_getchar, wait,
 };
+use taskbar::{Action, BarClick};
 
 const TOPBAR_HEIGHT: u32 = 28;
-const ICON_Y: u32 = 48;
 const ICON_W: u32 = 58;
 const ICON_H: u32 = 72;
 const DETACHED_CAP: usize = 8;
-const ICON_SLOTS: usize = 12;
+const LAUNCH_COOLDOWN_MS: u64 = 500;
+const TICK_MS: u64 = 100;
+const SLOW_TICK_MS: u64 = 500;
+const POWER_MENU_W: u32 = 150;
+const POWER_MENU_H: u32 = 62;
 
-struct Icon {
-    x: u32,
-    y: u32,
+#[derive(Clone, Copy, PartialEq)]
+enum Popup {
+    None,
+    Start,
+    Power,
+    Audio,
 }
 
-static mut ICONS: [Icon; ICON_SLOTS] = [
-    Icon { x: 348, y: ICON_Y },
-    Icon { x: 420, y: ICON_Y },
-    Icon { x: 500, y: ICON_Y },
-    Icon { x: 40, y: ICON_Y },
-    Icon { x: 112, y: ICON_Y },
-    Icon { x: 184, y: ICON_Y },
-    Icon { x: 256, y: ICON_Y },
-    Icon { x: 328, y: ICON_Y },
-    Icon { x: 400, y: 130 },
-    Icon { x: 472, y: 130 },
-    Icon { x: 544, y: 130 },
-    Icon { x: 40, y: 210 },
-];
+static mut POPUP: Popup = Popup::None;
 static mut SCREEN_W: u32 = 0;
 static mut SCREEN_H: u32 = 0;
-static mut LAYOUT_READY: bool = false;
-static mut INSTALLER_VISIBLE: bool = true;
 static mut DETACHED: [i32; DETACHED_CAP] = [0; DETACHED_CAP];
 static mut PREV_BUTTONS: u8 = 0;
-static mut POWER_MENU: bool = false;
-static mut DRAGGED_ICON: i8 = -1;
+static mut DRAGGED_ICON: i32 = -1;
 static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
+static mut ICON_MOVED: bool = false;
 static mut LAST_LAUNCH_MS: u64 = 0;
 static mut WP_PATH: [u8; 128] = [0; 128];
 static mut WP_PATH_LEN: usize = 0;
 static mut WP_SYNCED: bool = false;
+
+fn popup() -> Popup {
+    unsafe { *core::ptr::addr_of!(POPUP) }
+}
+
+fn screen_w() -> u32 {
+    unsafe { *core::ptr::addr_of!(SCREEN_W) }
+}
+
+fn screen_h() -> u32 {
+    unsafe { *core::ptr::addr_of!(SCREEN_H) }
+}
+
+fn point_inside(px: i32, py: i32, left: u32, top: u32, w: u32, h: u32) -> bool {
+    px >= left as i32 && py >= top as i32 && px < (left + w) as i32 && py < (top + h) as i32
+}
 
 fn sync_wallpaper_path() {
     let mut buf = [0u8; 128];
@@ -70,53 +81,6 @@ fn sync_wallpaper_path() {
     }
     wallpaper::set_path(&buf[..n]);
 }
-static mut ICON_MOVED: bool = false;
-
-fn icons() -> &'static mut [Icon; ICON_SLOTS] {
-    unsafe { &mut *core::ptr::addr_of_mut!(ICONS) }
-}
-
-fn screen_w() -> u32 {
-    unsafe { *core::ptr::addr_of!(SCREEN_W) }
-}
-
-fn screen_h() -> u32 {
-    unsafe { *core::ptr::addr_of!(SCREEN_H) }
-}
-
-fn point_inside(px: i32, py: i32, left: u32, top: u32, w: u32, h: u32) -> bool {
-    px >= left as i32 && py >= top as i32 && px < (left + w) as i32 && py < (top + h) as i32
-}
-
-fn draw_htop_icon() {
-    let th = personal::current_colors();
-    let (x, y) = (icons()[1].x, icons()[1].y);
-    let label = personal::label_size();
-    disp::draw_rect(x, y, ICON_W, 50, th.titlebar);
-    disp::draw_rect(x + 7, y + 8, 44, 30, th.window);
-    disp::draw_text_sized(x + 9, y + 55, "HTOP", th.text, th.desktop, label);
-}
-
-fn draw_explorer_icon() {
-    let th = personal::current_colors();
-    let (x, y) = (icons()[0].x, icons()[0].y);
-    let label = personal::label_size();
-    disp::draw_rect(x, y, ICON_W, 50, th.titlebar);
-    disp::draw_rect(x + 7, y + 13, 44, 27, 0xF9E2AF);
-    disp::draw_rect(x + 10, y + 9, 20, 8, 0xF9E2AF);
-    disp::draw_rect(x + 10, y + 18, 38, 4, 0xFAB387);
-    disp::draw_text_sized(x + 7, y + 55, "Files", th.text, th.desktop, label);
-}
-
-fn draw_terminal_icon() {
-    let th = personal::current_colors();
-    let (x, y) = (icons()[2].x, icons()[2].y);
-    let label = personal::label_size();
-    disp::draw_rect(x, y, ICON_W, 50, th.titlebar);
-    disp::draw_rect(x + 7, y + 8, 44, 30, th.window);
-    disp::draw_text(x + 13, y + 18, ">_", 0xA6E3A1, th.window);
-    disp::draw_text_sized(x, y + 55, "Terminal", th.text, th.desktop, label);
-}
 
 fn draw_app_icon(ix: u32, iy: u32, symbol: &str, label_text: &str, color: u32) {
     let th = personal::current_colors();
@@ -128,41 +92,34 @@ fn draw_app_icon(ix: u32, iy: u32, symbol: &str, label_text: &str, color: u32) {
 }
 
 fn draw_icons() {
-    let icons_visible = unsafe { *core::ptr::addr_of!(INSTALLER_VISIBLE) };
-    draw_explorer_icon();
-    draw_htop_icon();
-    draw_terminal_icon();
-    draw_app_icon(icons()[3].x, icons()[3].y, "12", "Clock", 0x89DCEB);
-    draw_app_icon(icons()[4].x, icons()[4].y, "+", "Calc", 0xA6E3A1);
-    draw_app_icon(icons()[5].x, icons()[5].y, "28", "Calendar", 0xF9E2AF);
-    draw_app_icon(icons()[6].x, icons()[6].y, "{}", "Settings", 0x94E2D5);
-    if icons_visible {
-        draw_app_icon(icons()[7].x, icons()[7].y, "OS", "Install", 0xCBA6F7);
+    for index in 0..entries::count() {
+        if let Some(entry) = entries::get(index) {
+            if !entry.hidden {
+                draw_app_icon(entry.x, entry.y, entry.icon_text(), entry.name(), entry.color);
+            }
+        }
     }
-    draw_app_icon(icons()[8].x, icons()[8].y, "HD", "Disks", 0xF9E2AF);
-    draw_app_icon(icons()[9].x, icons()[9].y, "[]", "Tetris", 0xF38BA8);
-    draw_app_icon(icons()[10].x, icons()[10].y, "LOG", "Logs", 0x89B4FA);
-    draw_app_icon(icons()[11].x, icons()[11].y, "HX", "HexEdit", 0xF5C2E7);
 }
 
 fn draw_power_button() {
     let th = personal::current_colors();
-    let x = screen_w() - 38;
+    let x = screen_w().saturating_sub(38);
     disp::draw_rect(x, 3, 30, 22, th.border);
     disp::draw_text(x + 7, 9, "PWR", th.text, th.border);
 }
 
+fn power_menu_origin() -> (u32, u32) {
+    (screen_w().saturating_sub(POWER_MENU_W + 8), TOPBAR_HEIGHT)
+}
+
 fn draw_power_menu() {
-    if !unsafe { *core::ptr::addr_of!(POWER_MENU) } {
-        return;
-    }
     let th = personal::current_colors();
-    let x = screen_w() - 158;
-    disp::draw_rect(x, 28, 150, 62, th.border);
-    disp::draw_rect(x + 2, 30, 146, 28, th.window);
-    disp::draw_rect(x + 2, 60, 146, 28, th.window);
-    disp::draw_text(x + 12, 39, "Restart", th.text, th.window);
-    disp::draw_text(x + 12, 69, "Power off", th.danger, th.window);
+    let (x, y) = power_menu_origin();
+    disp::draw_rect(x, y, POWER_MENU_W, POWER_MENU_H, th.border);
+    disp::draw_rect(x + 2, y + 2, POWER_MENU_W - 4, 28, th.window);
+    disp::draw_rect(x + 2, y + 32, POWER_MENU_W - 4, 28, th.window);
+    disp::draw_text(x + 12, y + 11, "Restart", th.text, th.window);
+    disp::draw_text(x + 12, y + 41, "Power off", th.danger, th.window);
 }
 
 fn draw_desktop() {
@@ -177,22 +134,6 @@ fn draw_desktop() {
     unsafe {
         *core::ptr::addr_of_mut!(SCREEN_W) = w;
         *core::ptr::addr_of_mut!(SCREEN_H) = h;
-        if !*core::ptr::addr_of!(LAYOUT_READY) {
-            let icons = icons();
-            icons[0].x = if w > 700 { 420 } else { w - 212 };
-            icons[1].x = icons[0].x + 72;
-            icons[2].x = icons[1].x + 72;
-            if w <= 700 {
-                icons[6].y = 130;
-                icons[7].y = 130;
-            }
-            if w <= 560 {
-                icons[3].y = 130;
-                icons[4].y = 130;
-                icons[5].y = 130;
-            }
-            *core::ptr::addr_of_mut!(LAYOUT_READY) = true;
-        }
     }
     let th = personal::current_colors();
     disp::set_font_face(personal::font_face());
@@ -203,9 +144,66 @@ fn draw_desktop() {
     }
     disp::draw_rect(0, 0, w, TOPBAR_HEIGHT, th.titlebar);
     disp::draw_text(12, 8, "PureC OS", th.accent, th.titlebar);
-    panel::draw(w);
+    panel::draw_badge(w);
     draw_icons();
     draw_power_button();
+    taskbar::draw(w, h, popup() == Popup::Start);
+}
+
+fn draw_popup() {
+    match popup() {
+        Popup::None => disp::popup_close(),
+        Popup::Start => {
+            let (x, y, w, h) = taskbar::menu_rect(screen_h());
+            if disp::popup_begin(x, y, w, h) {
+                taskbar::draw_menu(screen_h());
+                disp::popup_end();
+            }
+        }
+        Popup::Power => {
+            let (x, y) = power_menu_origin();
+            if disp::popup_begin(x, y, POWER_MENU_W, POWER_MENU_H) {
+                draw_power_menu();
+                disp::popup_end();
+            }
+        }
+        Popup::Audio => {
+            let (x, y, w, h) = panel::popup_rect(screen_w());
+            if disp::popup_begin(x, y, w, h) {
+                panel::draw_popup(screen_w());
+                disp::popup_end();
+            }
+        }
+    }
+}
+
+fn set_popup(kind: Popup) {
+    let previous = popup();
+    if previous == kind {
+        return;
+    }
+    unsafe {
+        *core::ptr::addr_of_mut!(POPUP) = kind;
+    }
+    if kind != Popup::Audio {
+        panel::set_popup(false);
+    }
+    draw_popup();
+    if previous == Popup::Start || kind == Popup::Start {
+        redraw_taskbar();
+    }
+}
+
+fn redraw_taskbar() {
+    disp::begin_update();
+    taskbar::draw(screen_w(), screen_h(), popup() == Popup::Start);
+    disp::end_update();
+}
+
+fn redraw_badge() {
+    disp::begin_update();
+    panel::draw_badge(screen_w());
+    disp::end_update();
 }
 
 fn draw_all() {
@@ -214,8 +212,8 @@ fn draw_all() {
     if apps::is_visible() {
         apps::draw();
     }
-    draw_power_menu();
     disp::end_update();
+    draw_popup();
 }
 
 fn install_present() -> bool {
@@ -244,6 +242,7 @@ fn run_detached(path: &str) -> i32 {
 }
 
 fn reap_detached() {
+    let mut finished = false;
     unsafe {
         let slots = &mut *core::ptr::addr_of_mut!(DETACHED);
         for slot in slots.iter_mut() {
@@ -253,53 +252,91 @@ fn reap_detached() {
             let mut status = 0i32;
             if wait(*slot, Some(&mut status), true) > 0 {
                 *slot = 0;
-                *core::ptr::addr_of_mut!(INSTALLER_VISIBLE) = !install_present();
+                finished = true;
             }
         }
     }
+    if finished {
+        entries::set_installer_visible(!install_present());
+        draw_all();
+    }
 }
 
-fn launch(icon: usize) {
+fn launch_entry(index: usize) {
     let now = uptime_ms();
     let last = unsafe { *core::ptr::addr_of!(LAST_LAUNCH_MS) };
-    if now - last < 500 {
+    if now.wrapping_sub(last) < LAUNCH_COOLDOWN_MS {
         return;
     }
     unsafe {
         *core::ptr::addr_of_mut!(LAST_LAUNCH_MS) = now;
     }
-    match icon {
-        0 => {
-            run_detached("/bin/program/files");
+    let Some(entry) = entries::get(index) else {
+        return;
+    };
+    let exec_path = entry.exec();
+    if !exec_path.is_empty() {
+        run_detached(exec_path);
+        return;
+    }
+    let app = match entry.builtin() {
+        "clock" => apps::APP_CLOCK,
+        "calc" => apps::APP_CALCULATOR,
+        "calendar" => apps::APP_CALENDAR,
+        _ => return,
+    };
+    apps::open(app, screen_w(), screen_h());
+}
+
+fn run_action(action: Action) {
+    match action {
+        Action::None => {}
+        Action::Launch(index) => launch_entry(index),
+        Action::Reboot => {
+            apps::save_time();
+            reboot();
         }
-        1 => {
-            run_detached("/bin/program/monitor");
-        }
-        2 => {
-            run_detached("/bin/program/terminal");
-        }
-        6 => {
-            run_detached("/bin/program/settings");
-        }
-        7 => {
-            run_detached("/bin/installer");
-        }
-        8 => {
-            run_detached("/bin/program/disks");
-        }
-        9 => {
-            run_detached("/bin/program/tetris");
-        }
-        10 => {
-            run_detached("/bin/program/logview");
-        }
-        11 => {
-            run_detached("/bin/program/hexedit");
-        }
-        _ => {
-            apps::open(icon - 3, screen_w(), screen_h());
+        Action::Shutdown => {
+            apps::save_time();
+            shutdown();
         }
     }
+}
+
+fn handle_popup_click(x: i32, y: i32) -> bool {
+    match popup() {
+        Popup::Start => {
+            if let Some(action) = taskbar::menu_click(x, y, screen_h()) {
+                set_popup(Popup::None);
+                run_action(action);
+                return true;
+            }
+            false
+        }
+        Popup::Power => {
+            let (px, py) = power_menu_origin();
+            if point_inside(x, y, px, py, POWER_MENU_W, POWER_MENU_H) {
+                let restart = y < (py + 31) as i32;
+                set_popup(Popup::None);
+                run_action(if restart {
+                    Action::Reboot
+                } else {
+                    Action::Shutdown
+                });
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn clamp_icon(x: i32, y: i32) -> (u32, u32) {
+    let max_x = screen_w() as i32 - ICON_W as i32;
+    let max_y = screen_h() as i32 - ICON_H as i32 - taskbar::HEIGHT as i32;
+    let cx = x.clamp(0, max_x.max(0));
+    let cy = y.clamp(TOPBAR_HEIGHT as i32, max_y.max(TOPBAR_HEIGHT as i32));
+    (cx as u32, cy as u32)
 }
 
 fn handle_mouse() {
@@ -310,21 +347,22 @@ fn handle_mouse() {
     let prev = unsafe { *core::ptr::addr_of!(PREV_BUTTONS) };
     let pressed = (mouse.buttons & 1) != 0 && (prev & 1) == 0;
     let released = (mouse.buttons & 1) == 0 && (prev & 1) != 0;
-    let mut redraw = false;
-    let (wm_consumed, _) = wm_pointer(mouse.x, mouse.y, mouse.buttons);
-    let mut consumed = wm_consumed;
-
-    if !consumed && pressed && point_inside(mouse.x, mouse.y, screen_w() - 38, 3, 30, 22) {
-        unsafe {
-            let menu = &mut *core::ptr::addr_of_mut!(POWER_MENU);
-            *menu = !*menu;
-        }
-        consumed = true;
-        redraw = true;
+    unsafe {
+        *core::ptr::addr_of_mut!(PREV_BUTTONS) = mouse.buttons;
     }
-    if !consumed {
+    let (wm_consumed, _) = wm_pointer(mouse.x, mouse.y, mouse.buttons);
+    let mut consumed = false;
+
+    if pressed && handle_popup_click(mouse.x, mouse.y) {
+        consumed = true;
+    }
+    if !consumed && pressed && matches!(popup(), Popup::Start | Popup::Power) {
+        set_popup(Popup::None);
+    }
+
+    if popup() == Popup::Audio || (!consumed && !wm_consumed) {
         let mut panel_redraw = false;
-        consumed = panel::handle_mouse(
+        let panel_consumed = panel::handle_mouse(
             mouse.x,
             mouse.y,
             mouse.buttons,
@@ -333,25 +371,51 @@ fn handle_mouse() {
             screen_w(),
             &mut panel_redraw,
         );
-        redraw = redraw || panel_redraw;
-    }
-    if !consumed && pressed && unsafe { *core::ptr::addr_of!(POWER_MENU) } {
-        let menu_x = screen_w() - 158;
-        if point_inside(mouse.x, mouse.y, menu_x, 28, 150, 30) {
-            apps::save_time();
-            reboot();
-        } else if point_inside(mouse.x, mouse.y, menu_x, 58, 150, 32) {
-            apps::save_time();
-            shutdown();
-        } else {
-            unsafe {
-                *core::ptr::addr_of_mut!(POWER_MENU) = false;
-            }
-            redraw = true;
+        let visible = panel::is_popup_visible();
+        if visible && popup() != Popup::Audio {
+            set_popup(Popup::Audio);
+        } else if !visible && popup() == Popup::Audio {
+            set_popup(Popup::None);
+        } else if panel_redraw {
+            draw_popup();
         }
-        consumed = true;
+        if panel_redraw {
+            redraw_badge();
+        }
+        consumed = consumed || panel_consumed;
     }
-    if !consumed && apps::is_visible() {
+
+    if !consumed && !wm_consumed && pressed {
+        if point_inside(mouse.x, mouse.y, screen_w().saturating_sub(38), 3, 30, 22) {
+            let next = if popup() == Popup::Power {
+                Popup::None
+            } else {
+                Popup::Power
+            };
+            set_popup(next);
+            consumed = true;
+        } else {
+            match taskbar::bar_click(mouse.x, mouse.y, screen_w(), screen_h()) {
+                BarClick::Start => {
+                    let next = if popup() == Popup::Start {
+                        Popup::None
+                    } else {
+                        Popup::Start
+                    };
+                    set_popup(next);
+                    consumed = true;
+                }
+                BarClick::Handled => {
+                    taskbar::poll();
+                    redraw_taskbar();
+                    consumed = true;
+                }
+                BarClick::Outside => {}
+            }
+        }
+    }
+
+    if !consumed && !wm_consumed && apps::is_visible() {
         let mut app_redraw = false;
         consumed = apps::handle_mouse(
             mouse.x,
@@ -363,71 +427,54 @@ fn handle_mouse() {
             screen_h(),
             &mut app_redraw,
         );
-        redraw = redraw || app_redraw;
+        if app_redraw {
+            draw_all();
+        }
     }
-    let installer_visible = unsafe { *core::ptr::addr_of!(INSTALLER_VISIBLE) };
-    if pressed && !consumed {
-        let icons = icons();
-        for index in 0..ICON_SLOTS {
-            if index == 7 && !installer_visible {
+
+    if pressed && !consumed && !wm_consumed {
+        for index in 0..entries::count() {
+            let Some(entry) = entries::get(index) else {
+                continue;
+            };
+            if entry.hidden {
                 continue;
             }
-            if point_inside(mouse.x, mouse.y, icons[index].x, icons[index].y, ICON_W, ICON_H) {
+            if point_inside(mouse.x, mouse.y, entry.x, entry.y, ICON_W, ICON_H) {
                 unsafe {
-                    *core::ptr::addr_of_mut!(DRAGGED_ICON) = index as i8;
-                    *core::ptr::addr_of_mut!(DRAG_OFF_X) = mouse.x - icons[index].x as i32;
-                    *core::ptr::addr_of_mut!(DRAG_OFF_Y) = mouse.y - icons[index].y as i32;
+                    *core::ptr::addr_of_mut!(DRAGGED_ICON) = index as i32;
+                    *core::ptr::addr_of_mut!(DRAG_OFF_X) = mouse.x - entry.x as i32;
+                    *core::ptr::addr_of_mut!(DRAG_OFF_Y) = mouse.y - entry.y as i32;
                     *core::ptr::addr_of_mut!(ICON_MOVED) = false;
                 }
                 break;
             }
         }
     }
+
     let dragged = unsafe { *core::ptr::addr_of!(DRAGGED_ICON) };
     if dragged >= 0 && (mouse.buttons & 1) != 0 {
-        let icons = icons();
-        let slot = &mut icons[dragged as usize];
         let off_x = unsafe { *core::ptr::addr_of!(DRAG_OFF_X) };
         let off_y = unsafe { *core::ptr::addr_of!(DRAG_OFF_Y) };
-        let mut next_x = mouse.x - off_x;
-        let mut next_y = mouse.y - off_y;
-        if next_x < 0 {
-            next_x = 0;
-        }
-        if next_x > screen_w() as i32 - ICON_W as i32 {
-            next_x = screen_w() as i32 - ICON_W as i32;
-        }
-        if next_y < TOPBAR_HEIGHT as i32 {
-            next_y = TOPBAR_HEIGHT as i32;
-        }
-        if next_y > screen_h() as i32 - ICON_H as i32 {
-            next_y = screen_h() as i32 - ICON_H as i32;
-        }
-        if next_x as u32 != slot.x || next_y as u32 != slot.y {
-            slot.x = next_x as u32;
-            slot.y = next_y as u32;
-            unsafe {
-                *core::ptr::addr_of_mut!(ICON_MOVED) = true;
+        let (nx, ny) = clamp_icon(mouse.x - off_x, mouse.y - off_y);
+        if let Some(entry) = entries::get(dragged as usize) {
+            if nx != entry.x || ny != entry.y {
+                entries::set_position(dragged as usize, nx, ny);
+                unsafe {
+                    *core::ptr::addr_of_mut!(ICON_MOVED) = true;
+                }
+                draw_all();
             }
-            draw_all();
         }
     }
     if released && dragged >= 0 {
-        let icon = dragged as usize;
         let moved = unsafe { *core::ptr::addr_of!(ICON_MOVED) };
         unsafe {
             *core::ptr::addr_of_mut!(DRAGGED_ICON) = -1;
         }
         if !moved {
-            launch(icon);
+            launch_entry(dragged as usize);
         }
-        redraw = true;
-    }
-    unsafe {
-        *core::ptr::addr_of_mut!(PREV_BUTTONS) = mouse.buttons;
-    }
-    if redraw {
-        draw_all();
     }
 }
 
@@ -447,25 +494,24 @@ fn handle_keyboard() {
         if key < 0 {
             break;
         }
-        panel::handle_special_key(key as u8);
+        if panel::handle_special_key(key as u8) {
+            redraw_badge();
+            if popup() == Popup::Audio {
+                draw_popup();
+            }
+        }
     }
 }
-
-const TICK_MS: u64 = 100;
-const SLOW_TICK_MS: u64 = 500;
 
 fn update_work_area() {
     let w = disp::width();
     let h = disp::height();
-    wm_set_work_area(0, TOPBAR_HEIGHT, w, h.saturating_sub(TOPBAR_HEIGHT));
+    let reserved = TOPBAR_HEIGHT + taskbar::HEIGHT;
+    wm_set_work_area(0, TOPBAR_HEIGHT, w, h.saturating_sub(reserved));
 }
 
 fn reload_mode() {
-    if disp::refresh_mode() {
-        unsafe {
-            *core::ptr::addr_of_mut!(LAYOUT_READY) = false;
-        }
-    }
+    disp::refresh_mode();
     update_work_area();
     disp::invalidate();
     draw_all();
@@ -489,10 +535,10 @@ pub extern "C" fn _start() -> ! {
     personal::poll();
     sync_wallpaper_path();
     panel::init();
-    unsafe {
-        *core::ptr::addr_of_mut!(INSTALLER_VISIBLE) = !install_present();
-    }
+    entries::rescan();
+    entries::set_installer_visible(!install_present());
     run_detached("/bin/program/login");
+    taskbar::poll();
     draw_all();
     let mut last_tick = uptime_ms();
     let mut last_slow = last_tick;
@@ -513,6 +559,9 @@ pub extern "C" fn _start() -> ! {
             reap_detached();
             apps::update();
             handle_keyboard();
+            if taskbar::poll() {
+                redraw_taskbar();
+            }
         }
         if now.wrapping_sub(last_slow) >= SLOW_TICK_MS {
             last_slow = now;

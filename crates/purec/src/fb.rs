@@ -58,6 +58,11 @@ pub fn mouse_get() -> Option<MouseState> {
 }
 
 const SYS_TIME_GET: u64 = 319;
+const SYS_GUI_WINDOW_REGISTER: u64 = 251;
+const SYS_GUI_WINDOW_UPDATE: u64 = 252;
+const SYS_GUI_WINDOW_UNREGISTER: u64 = 253;
+const SYS_FB_BLIT: u64 = 322;
+const SYS_GUI_WINDOW_FLAGS: u64 = 351;
 const SYS_DESKTOP_CLAIM: u64 = 346;
 const SYS_DESKTOP_BLIT: u64 = 347;
 const SYS_DESKTOP_WAIT: u64 = 348;
@@ -72,6 +77,16 @@ const WM_HAS_FOCUS: u64 = 2;
 const WM_REQUEST_REPAINT: u64 = 3;
 const WM_FOCUSED_PID: u64 = 4;
 const WM_SET_WORK_AREA: u64 = 5;
+const WM_TASKS: u64 = 6;
+const WM_ACTIVATE: u64 = 7;
+const WM_COMMAND: u64 = 8;
+
+pub const CMD_MINIMIZE: u32 = 1;
+pub const CMD_RESTORE: u32 = 2;
+
+pub const WINDOW_FLAG_POPUP: u32 = 4;
+pub const TASK_MINIMIZED: u32 = 1;
+pub const TASK_FOCUSED: u32 = 2;
 
 pub fn uptime_ms() -> u64 {
     let mut info = TimeInfo {
@@ -168,4 +183,121 @@ pub fn wm_focused_pid() -> u32 {
     } else {
         result as u32
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TaskInfo {
+    pub pid: u32,
+    pub flags: u32,
+    pub name: [u8; 32],
+}
+
+impl TaskInfo {
+    pub const fn empty() -> Self {
+        Self {
+            pid: 0,
+            flags: 0,
+            name: [0; 32],
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        let len = self.name.iter().position(|&b| b == 0).unwrap_or(self.name.len());
+        core::str::from_utf8(&self.name[..len]).unwrap_or("")
+    }
+}
+
+pub fn wm_tasks(out: &mut [TaskInfo]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+    let result = unsafe {
+        super::syscall(
+            SYS_DESKTOP_WM,
+            WM_TASKS,
+            out.as_mut_ptr() as u64,
+            out.len() as u64,
+        )
+    };
+    if result < 0 {
+        0
+    } else {
+        (result as usize).min(out.len())
+    }
+}
+
+pub fn wm_activate(pid: u32) -> bool {
+    unsafe { super::syscall(SYS_DESKTOP_WM, WM_ACTIVATE, pid as u64, 0) == 0 }
+}
+
+#[repr(C)]
+struct WindowRequest {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+pub fn window_register(x: u32, y: u32, w: u32, h: u32) -> bool {
+    let request = WindowRequest {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    unsafe {
+        super::syscall(
+            SYS_GUI_WINDOW_REGISTER,
+            &request as *const WindowRequest as u64,
+            0,
+            0,
+        ) == 0
+    }
+}
+
+pub fn window_update(x: u32, y: u32, w: u32, h: u32) -> bool {
+    let request = WindowRequest {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    unsafe {
+        super::syscall(
+            SYS_GUI_WINDOW_UPDATE,
+            &request as *const WindowRequest as u64,
+            0,
+            0,
+        ) == 0
+    }
+}
+
+pub fn window_unregister() {
+    unsafe {
+        super::syscall(SYS_GUI_WINDOW_UNREGISTER, 0, 0, 0);
+    }
+}
+
+pub fn window_set_flags(flags: u32) -> bool {
+    unsafe { super::syscall(SYS_GUI_WINDOW_FLAGS, flags as u64, 0, 0) == 0 }
+}
+
+pub fn window_blit(pixels: *const u32, stride: u32, x: u32, y: u32, w: u32, h: u32) -> bool {
+    let request = BlitRequest {
+        pixels: pixels as u64,
+        stride,
+        width: w,
+        height: h,
+        x: x as i32,
+        y: y as i32,
+        flags: 0,
+    };
+    unsafe {
+        super::syscall(SYS_FB_BLIT, &request as *const BlitRequest as u64, 0, 0) == 0
+    }
+}
+
+pub fn wm_command(pid: u32, command: u32) -> bool {
+    unsafe { super::syscall(SYS_DESKTOP_WM, WM_COMMAND, pid as u64, command as u64) == 0 }
 }

@@ -7,6 +7,12 @@
 extern "C" {
 #endif
 
+typedef void (*panel_rect_fn)(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                              uint32_t color);
+typedef void (*panel_text_fn)(uint32_t x, uint32_t y, const char *text,
+                              uint32_t fg, uint32_t bg);
+
+void panel_set_draw_backend(panel_rect_fn rect, panel_text_fn text);
 void panel_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                      uint32_t color);
 void panel_draw_text(uint32_t x, uint32_t y, const char *text, uint32_t fg,

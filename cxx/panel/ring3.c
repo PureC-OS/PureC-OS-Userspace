@@ -1,13 +1,29 @@
 #include "ring3.h"
 #include "purec.h"
 
+static panel_rect_fn rect_backend;
+static panel_text_fn text_backend;
+
+void panel_set_draw_backend(panel_rect_fn rect, panel_text_fn text) {
+    rect_backend = rect;
+    text_backend = text;
+}
+
 void panel_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                      uint32_t color) {
+    if (rect_backend) {
+        rect_backend(x, y, w, h, color);
+        return;
+    }
     pc_draw_rect(x, y, w, h, color);
 }
 
 void panel_draw_text(uint32_t x, uint32_t y, const char *text, uint32_t fg,
                      uint32_t bg) {
+    if (text_backend) {
+        text_backend(x, y, text, fg, bg);
+        return;
+    }
     pc_draw_text(x, y, text, fg, bg);
 }
 

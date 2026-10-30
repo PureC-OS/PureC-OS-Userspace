@@ -18,6 +18,8 @@ struct Canvas {
     dirty_y1: u32,
     depth: u32,
     face: u32,
+    origin_x: u32,
+    origin_y: u32,
 }
 
 static mut CANVAS: Canvas = Canvas {
@@ -33,10 +35,41 @@ static mut CANVAS: Canvas = Canvas {
     dirty_y1: 0,
     depth: 0,
     face: 1,
+    origin_x: 0,
+    origin_y: 0,
 };
 
-fn canvas() -> &'static mut Canvas {
+static mut POPUP: Canvas = Canvas {
+    buf: core::ptr::null_mut(),
+    shown: core::ptr::null_mut(),
+    force: true,
+    capacity: 0,
+    width: 0,
+    height: 0,
+    dirty_x0: 0,
+    dirty_y0: 0,
+    dirty_x1: 0,
+    dirty_y1: 0,
+    depth: 0,
+    face: 1,
+    origin_x: 0,
+    origin_y: 0,
+};
+static mut POPUP_ACTIVE: bool = false;
+static mut POPUP_OPEN: bool = false;
+
+fn main_canvas() -> &'static mut Canvas {
     unsafe { &mut *core::ptr::addr_of_mut!(CANVAS) }
+}
+
+fn canvas() -> &'static mut Canvas {
+    unsafe {
+        if *core::ptr::addr_of!(POPUP_ACTIVE) {
+            &mut *core::ptr::addr_of_mut!(POPUP)
+        } else {
+            &mut *core::ptr::addr_of_mut!(CANVAS)
+        }
+    }
 }
 
 impl Canvas {
@@ -58,23 +91,27 @@ impl Canvas {
     }
 
     fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
-        if self.buf.is_null() || x >= self.width || y >= self.height {
+        if self.buf.is_null() {
             return;
         }
-        let x1 = x.saturating_add(w).min(self.width);
-        let y1 = y.saturating_add(h).min(self.height);
-        if x1 <= x || y1 <= y {
+        let lx = x as i64 - self.origin_x as i64;
+        let ly = y as i64 - self.origin_y as i64;
+        let x0 = lx.max(0);
+        let y0 = ly.max(0);
+        let x1 = (lx + w as i64).min(self.width as i64);
+        let y1 = (ly + h as i64).min(self.height as i64);
+        if x1 <= x0 || y1 <= y0 {
             return;
         }
         let stride = self.width as usize;
-        for row in y..y1 {
-            let start = row as usize * stride + x as usize;
+        for row in y0..y1 {
+            let start = row as usize * stride + x0 as usize;
             let line = unsafe {
-                core::slice::from_raw_parts_mut(self.buf.add(start), (x1 - x) as usize)
+                core::slice::from_raw_parts_mut(self.buf.add(start), (x1 - x0) as usize)
             };
             line.fill(color);
         }
-        self.mark(x, y, x1, y1);
+        self.mark(x0 as u32, y0 as u32, x1 as u32, y1 as u32);
     }
 
     fn glyph_bits(&self, ch: u8, row: u32) -> u8 {
@@ -144,11 +181,14 @@ fn pages(bytes: usize) -> u64 {
 }
 
 pub fn init() -> bool {
+    unsafe {
+        *core::ptr::addr_of_mut!(POPUP_ACTIVE) = false;
+    }
     let info = match fb::display_info() {
         Some(info) if info.available && info.width != 0 && info.height != 0 => info,
         _ => return false,
     };
-    let c = canvas();
+    let c = main_canvas();
     let need = info.width as usize * info.height as usize;
     if c.buf.is_null() || need > c.capacity {
         let bytes = pages(need * 4);
@@ -174,7 +214,7 @@ pub fn init() -> bool {
 }
 
 pub fn refresh_mode() -> bool {
-    let c = canvas();
+    let c = main_canvas();
     let (w, h) = (c.width, c.height);
     if !init() {
         return false;
@@ -183,19 +223,19 @@ pub fn refresh_mode() -> bool {
 }
 
 pub fn is_available() -> bool {
-    !canvas().buf.is_null()
+    !main_canvas().buf.is_null()
 }
 pub fn width() -> u32 {
-    canvas().width
+    main_canvas().width
 }
 pub fn height() -> u32 {
-    canvas().height
+    main_canvas().height
 }
 pub fn pitch() -> u32 {
-    canvas().width
+    main_canvas().width
 }
 pub fn buffer() -> *mut u32 {
-    canvas().buf
+    main_canvas().buf
 }
 pub fn set_font_face(face: u32) {
     canvas().face = face;
@@ -211,17 +251,17 @@ pub fn draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
 }
 pub fn clear(color: u32) {
     let c = canvas();
-    let (w, h) = (c.width, c.height);
-    c.fill(0, 0, w, h, color);
+    let (ox, oy, w, h) = (c.origin_x, c.origin_y, c.width, c.height);
+    c.fill(ox, oy, w, h, color);
 }
 pub fn mark_dirty(x: u32, y: u32, w: u32, h: u32) {
-    let c = canvas();
+    let c = main_canvas();
     let x1 = x.saturating_add(w).min(c.width);
     let y1 = y.saturating_add(h).min(c.height);
     c.mark(x, y, x1, y1);
 }
 pub fn mark_all_dirty() {
-    let c = canvas();
+    let c = main_canvas();
     let (w, h) = (c.width, c.height);
     c.mark(0, 0, w, h);
 }
@@ -238,14 +278,14 @@ pub fn end_update() {
     }
 }
 pub fn invalidate() {
-    let c = canvas();
+    let c = main_canvas();
     c.force = true;
     let (w, h) = (c.width, c.height);
     c.mark(0, 0, w, h);
 }
 
 pub fn flush() {
-    let c = canvas();
+    let c = main_canvas();
     if c.buf.is_null() || c.dirty_x0 >= c.dirty_x1 || c.dirty_y0 >= c.dirty_y1 {
         return;
     }
@@ -306,4 +346,76 @@ pub fn flush() {
     }
     let origin = unsafe { c.buf.add(y0 as usize * stride + x0 as usize) };
     fb::desktop_blit(origin, c.width, x0, y0, x1 - x0, y1 - y0);
+}
+
+const POPUP_MIN_PIXELS: usize = 512 * 640;
+static mut POPUP_RECT: (u32, u32, u32, u32) = (0, 0, 0, 0);
+
+pub fn popup_begin(x: u32, y: u32, w: u32, h: u32) -> bool {
+    if w == 0 || h == 0 {
+        return false;
+    }
+    let p = unsafe { &mut *core::ptr::addr_of_mut!(POPUP) };
+    let need = w as usize * h as usize;
+    if p.buf.is_null() || need > p.capacity {
+        let pixels = need.max(POPUP_MIN_PIXELS);
+        match purec::heap_grow(pages(pixels * 4)) {
+            Some(ptr) => {
+                p.buf = ptr as *mut u32;
+                p.capacity = pixels;
+            }
+            None => return false,
+        }
+    }
+    p.width = w;
+    p.height = h;
+    p.origin_x = x;
+    p.origin_y = y;
+    p.face = main_canvas().face;
+    p.dirty_x0 = 0;
+    p.dirty_y0 = 0;
+    p.dirty_x1 = 0;
+    p.dirty_y1 = 0;
+    unsafe {
+        *core::ptr::addr_of_mut!(POPUP_RECT) = (x, y, w, h);
+        *core::ptr::addr_of_mut!(POPUP_ACTIVE) = true;
+    }
+    true
+}
+
+pub fn popup_end() {
+    let (x, y, w, h) = unsafe { *core::ptr::addr_of!(POPUP_RECT) };
+    unsafe {
+        *core::ptr::addr_of_mut!(POPUP_ACTIVE) = false;
+    }
+    let p = unsafe { &mut *core::ptr::addr_of_mut!(POPUP) };
+    if p.buf.is_null() {
+        return;
+    }
+    let open = unsafe { *core::ptr::addr_of!(POPUP_OPEN) };
+    if !open {
+        if !fb::window_register(x, y, w, h) {
+            return;
+        }
+        fb::window_set_flags(fb::WINDOW_FLAG_POPUP);
+        unsafe {
+            *core::ptr::addr_of_mut!(POPUP_OPEN) = true;
+        }
+    } else {
+        fb::window_update(x, y, w, h);
+    }
+    fb::window_blit(p.buf, w, x, y, w, h);
+}
+
+pub fn popup_close() {
+    unsafe {
+        if *core::ptr::addr_of!(POPUP_OPEN) {
+            fb::window_unregister();
+            *core::ptr::addr_of_mut!(POPUP_OPEN) = false;
+        }
+    }
+}
+
+pub fn popup_is_open() -> bool {
+    unsafe { *core::ptr::addr_of!(POPUP_OPEN) }
 }
