@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=Desktop RS
 Exec=/bin/program/desktop-rs
+Icon=/usr/share/icons/desktop-rs.icn
 IconColor=0xB7410E
 IconText=RS
 Type=Application
