@@ -225,23 +225,6 @@ fn install_present() -> bool {
     true
 }
 
-static mut QT_LOGIN_PID: i32 = 0;
-
-fn launch_login() {
-    let fd = file_open("/usr/bin/qt-login");
-    if fd >= 0 {
-        file_close(fd);
-        let pid = run_detached("/usr/bin/qt-login");
-        if pid > 0 {
-            unsafe {
-                *core::ptr::addr_of_mut!(QT_LOGIN_PID) = pid;
-            }
-            return;
-        }
-    }
-    run_detached("/bin/program/login");
-}
-
 fn run_detached(path: &str) -> i32 {
     unsafe {
         let slots = &mut *core::ptr::addr_of_mut!(DETACHED);
@@ -260,7 +243,6 @@ fn run_detached(path: &str) -> i32 {
 
 fn reap_detached() {
     let mut finished = false;
-    let mut fallback_login = false;
     unsafe {
         let slots = &mut *core::ptr::addr_of_mut!(DETACHED);
         for slot in slots.iter_mut() {
@@ -269,22 +251,10 @@ fn reap_detached() {
             }
             let mut status = 0i32;
             if wait(*slot, Some(&mut status), true) > 0 {
-                let qt_pid = unsafe { *core::ptr::addr_of!(QT_LOGIN_PID) };
-                if *slot == qt_pid {
-                    unsafe {
-                        *core::ptr::addr_of_mut!(QT_LOGIN_PID) = 0;
-                    }
-                    if status != 0 {
-                        fallback_login = true;
-                    }
-                }
                 *slot = 0;
                 finished = true;
             }
         }
-    }
-    if fallback_login {
-        run_detached("/bin/program/login");
     }
     if finished {
         entries::set_installer_visible(!install_present());
@@ -570,7 +540,7 @@ pub extern "C" fn _start() -> ! {
     panel::init();
     entries::rescan();
     entries::set_installer_visible(!install_present());
-    launch_login();
+    run_detached("/bin/program/login");
     taskbar::poll();
     draw_all();
     let mut last_tick = uptime_ms();
