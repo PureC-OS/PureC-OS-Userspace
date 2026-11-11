@@ -58,6 +58,7 @@ pub fn mouse_get() -> Option<MouseState> {
 }
 
 const SYS_TIME_GET: u64 = 319;
+const SYS_BATTERY_INFO: u64 = 220;
 const SYS_GUI_WINDOW_REGISTER: u64 = 251;
 const SYS_GUI_WINDOW_UPDATE: u64 = 252;
 const SYS_GUI_WINDOW_UNREGISTER: u64 = 253;
@@ -87,6 +88,48 @@ pub const CMD_RESTORE: u32 = 2;
 pub const WINDOW_FLAG_POPUP: u32 = 4;
 pub const TASK_MINIMIZED: u32 = 1;
 pub const TASK_FOCUSED: u32 = 2;
+
+#[repr(C)]
+struct BatteryInfo {
+    present: u32,
+    percent: u32,
+    charging: u32,
+    remaining_minutes: u32,
+    voltage_mv: u32,
+    current_ma: u32,
+    name: [u8; 32],
+    status_text: [u8; 32],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Battery {
+    pub percent: u32,
+    pub charging: bool,
+    pub remaining_minutes: u32,
+}
+
+pub fn battery() -> Option<Battery> {
+    let mut info = BatteryInfo {
+        present: 0,
+        percent: 0,
+        charging: 0,
+        remaining_minutes: 0,
+        voltage_mv: 0,
+        current_ma: 0,
+        name: [0; 32],
+        status_text: [0; 32],
+    };
+    let result =
+        unsafe { super::syscall(SYS_BATTERY_INFO, &mut info as *mut BatteryInfo as u64, 0, 0) };
+    if result < 0 || info.present == 0 || info.percent > 100 {
+        return None;
+    }
+    Some(Battery {
+        percent: info.percent,
+        charging: info.charging != 0,
+        remaining_minutes: info.remaining_minutes,
+    })
+}
 
 pub fn uptime_ms() -> u64 {
     let mut info = TimeInfo {

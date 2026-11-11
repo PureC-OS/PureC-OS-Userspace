@@ -2,7 +2,7 @@ use crate::entries;
 use desk_display as disp;
 use desk_personal as personal;
 use purec::fb::{
-    wm_activate, wm_command, wm_tasks, TaskInfo, CMD_MINIMIZE, TASK_FOCUSED, TASK_MINIMIZED,
+    battery, uptime_ms, Battery, wm_activate, wm_command, wm_tasks, TaskInfo, CMD_MINIMIZE, TASK_FOCUSED, TASK_MINIMIZED,
 };
 
 pub const HEIGHT: u32 = 30;
@@ -10,6 +10,8 @@ const START_W: u32 = 86;
 const TASK_W: u32 = 128;
 const TASK_GAP: u32 = 4;
 const TRAY_W: u32 = 84;
+const BATTERY_W: u32 = 64;
+const BATTERY_POLL_MS: u64 = 5000;
 const MENU_W: u32 = 248;
 const MENU_ROW_H: u32 = 26;
 const MENU_MAX_ROWS: u32 = 14;
@@ -26,6 +28,82 @@ pub enum Action {
 static mut TASKS: [TaskInfo; MAX_TASKS] = [TaskInfo::empty(); MAX_TASKS];
 static mut TASK_COUNT: usize = 0;
 static mut SIGNATURE: u64 = 0;
+static mut BATTERY: Option<Battery> = None;
+static mut BATTERY_AT: u64 = 0;
+static mut BATTERY_POLLED: bool = false;
+
+fn battery_state() -> Option<Battery> {
+    unsafe { *core::ptr::addr_of!(BATTERY) }
+}
+
+fn poll_battery() {
+    let now = uptime_ms();
+    unsafe {
+        let polled = *core::ptr::addr_of!(BATTERY_POLLED);
+        let last = *core::ptr::addr_of!(BATTERY_AT);
+        if polled && now.wrapping_sub(last) < BATTERY_POLL_MS {
+            return;
+        }
+        *core::ptr::addr_of_mut!(BATTERY_POLLED) = true;
+        *core::ptr::addr_of_mut!(BATTERY_AT) = now;
+        *core::ptr::addr_of_mut!(BATTERY) = battery();
+    }
+}
+
+fn battery_text(state: Battery, buffer: &mut [u8; 8]) -> &str {
+    let mut n = 0;
+    let p = state.percent.min(100);
+    if p >= 100 {
+        buffer[n] = b'1';
+        buffer[n + 1] = b'0';
+        buffer[n + 2] = b'0';
+        n += 3;
+    } else {
+        if p >= 10 {
+            buffer[n] = b'0' + (p / 10) as u8;
+            n += 1;
+        }
+        buffer[n] = b'0' + (p % 10) as u8;
+        n += 1;
+    }
+    buffer[n] = b'%';
+    n += 1;
+    if state.charging {
+        buffer[n] = b'+';
+        n += 1;
+    }
+    core::str::from_utf8(&buffer[..n]).unwrap_or("")
+}
+
+fn draw_battery(x: u32, y: u32, state: Battery) {
+    let th = personal::current_colors();
+    let bg = th.border;
+    disp::draw_rect(x, y + 4, BATTERY_W, HEIGHT - 8, bg);
+    let bx = x + 6;
+    let by = y + 10;
+    let bw = 18;
+    let bh = 10;
+    disp::draw_rect(bx, by, bw, 1, th.text);
+    disp::draw_rect(bx, by + bh - 1, bw, 1, th.text);
+    disp::draw_rect(bx, by, 1, bh, th.text);
+    disp::draw_rect(bx + bw - 1, by, 1, bh, th.text);
+    disp::draw_rect(bx + bw, by + 3, 2, bh - 6, th.text);
+    let fill_color = if state.charging {
+        0x40C060
+    } else if state.percent <= 15 {
+        0xE04040
+    } else {
+        th.accent
+    };
+    let inner = bw - 4;
+    let fill = (inner * state.percent.min(100) + 50) / 100;
+    if fill > 0 {
+        disp::draw_rect(bx + 2, by + 2, fill, bh - 4, fill_color);
+    }
+    let mut buffer = [0u8; 8];
+    let text = battery_text(state, &mut buffer);
+    disp::draw_text(bx + bw + 6, y + 11, text, th.text, bg);
+}
 
 fn tasks() -> &'static [TaskInfo] {
     unsafe { &(&*core::ptr::addr_of!(TASKS))[..*core::ptr::addr_of!(TASK_COUNT)] }
@@ -61,7 +139,11 @@ pub fn poll() -> bool {
     let mut buffer = [0u8; 20];
     desk_datetime::format(&mut buffer);
     let second = buffer[18];
-    let current = signature(&table[..count], second);
+    poll_battery();
+    let mut current = signature(&table[..count], second);
+    if let Some(state) = battery_state() {
+        current ^= ((state.percent as u64) << 40) ^ ((state.charging as u64) << 48);
+    }
     let previous = unsafe { *core::ptr::addr_of!(SIGNATURE) };
     unsafe {
         *core::ptr::addr_of_mut!(SIGNATURE) = current;
@@ -89,8 +171,14 @@ pub fn draw(screen_w: u32, screen_h: u32, menu_open: bool) {
 
     let mut x = 4 + START_W + 8;
     let tray_x = screen_w.saturating_sub(TRAY_W + 4);
+    let battery_now = battery_state();
+    let tasks_end = if battery_now.is_some() {
+        tray_x.saturating_sub(BATTERY_W + 4)
+    } else {
+        tray_x
+    };
     for task in tasks() {
-        if x + TASK_W > tray_x {
+        if x + TASK_W > tasks_end {
             break;
         }
         let focused = task.flags & TASK_FOCUSED != 0;
@@ -111,6 +199,9 @@ pub fn draw(screen_w: u32, screen_h: u32, menu_open: bool) {
 
     let mut buffer = [0u8; 20];
     let clock = clock_text(&mut buffer);
+    if let Some(state) = battery_now {
+        draw_battery(tasks_end, y, state);
+    }
     disp::draw_rect(tray_x, y + 4, TRAY_W, HEIGHT - 8, th.border);
     disp::draw_text(tray_x + 10, y + 11, clock, th.text, th.border);
 }
@@ -216,9 +307,14 @@ pub fn bar_click(x: i32, y: i32, screen_w: u32, screen_h: u32) -> BarClick {
         return BarClick::Start;
     }
     let tray_x = screen_w.saturating_sub(TRAY_W + 4);
+    let tasks_end = if battery_state().is_some() {
+        tray_x.saturating_sub(BATTERY_W + 4)
+    } else {
+        tray_x
+    };
     let mut bx = 4 + START_W + 8;
     for task in tasks() {
-        if bx + TASK_W > tray_x {
+        if bx + TASK_W > tasks_end {
             break;
         }
         if point_in(x, y, bx, top + 4, TASK_W, HEIGHT - 8) {
