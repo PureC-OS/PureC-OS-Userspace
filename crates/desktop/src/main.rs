@@ -2,6 +2,7 @@
 #![no_main]
 
 mod entries;
+mod icons;
 mod taskbar;
 
 use desk_datetime as dt;

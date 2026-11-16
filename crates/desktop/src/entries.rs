@@ -22,6 +22,9 @@ pub struct Entry {
     builtin_len: usize,
     icon_text: [u8; 8],
     icon_text_len: usize,
+    icon: [u8; 24],
+    icon_len: usize,
+    pub icon_slot: i32,
     pub color: u32,
     pub x: u32,
     pub y: u32,
@@ -39,6 +42,9 @@ impl Entry {
             builtin_len: 0,
             icon_text: [0; 8],
             icon_text_len: 0,
+            icon: [0; 24],
+            icon_len: 0,
+            icon_slot: -1,
             color: 0x89B4FA,
             x: 0,
             y: 0,
@@ -56,6 +62,10 @@ impl Entry {
 
     pub fn builtin(&self) -> &str {
         as_str(&self.builtin[..self.builtin_len])
+    }
+
+    pub fn icon_name(&self) -> &str {
+        as_str(&self.icon[..self.icon_len])
     }
 
     pub fn icon_text(&self) -> &str {
@@ -180,6 +190,8 @@ pub fn parse(data: &[u8]) -> Option<Entry> {
             entry.exec_len = copy_field(&mut entry.exec, &value[..end]);
         } else if eq_ignore_case(key, "Builtin") {
             entry.builtin_len = copy_field(&mut entry.builtin, value);
+        } else if eq_ignore_case(key, "Icon") {
+            entry.icon_len = copy_field(&mut entry.icon, value);
         } else if eq_ignore_case(key, "IconColor") || eq_ignore_case(key, "Color") {
             if let Some(color) = parse_color(value) {
                 entry.color = color;
@@ -295,6 +307,12 @@ pub fn rescan() {
                 if entry.exec().ends_with("desktop-rs") {
                     continue;
                 }
+                let mut entry = entry;
+                if entry.icon_len == 0 {
+                    let stem = &name[..name.len() - 8];
+                    entry.icon_len = copy_field(&mut entry.icon, stem);
+                }
+                entry.icon_slot = crate::icons::load(entry.icon_name());
                 table[found] = entry;
                 found += 1;
             }
