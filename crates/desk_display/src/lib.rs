@@ -1,6 +1,18 @@
 #![no_std]
 mod font;
-use purec::fb;
+#[derive(Clone, Copy)]
+struct View {
+    window: *mut vb::Window,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+const MAX_VIEWS: usize = 6;
+static mut VIEWS: [View; MAX_VIEWS] = [View { window: core::ptr::null_mut(), x: 0, y: 0, w: 0, h: 0 }; MAX_VIEWS];
+static mut VIEW_COUNT: usize = 0;
+static mut POPUP_WINDOW: *mut vb::Window = core::ptr::null_mut();
 
 const MIN_SIZE: u32 = 8;
 const MAX_SIZE: u32 = 48;
@@ -56,7 +68,6 @@ static mut POPUP: Canvas = Canvas {
     origin_y: 0,
 };
 static mut POPUP_ACTIVE: bool = false;
-static mut POPUP_OPEN: bool = false;
 
 fn main_canvas() -> &'static mut Canvas {
     unsafe { &mut *core::ptr::addr_of_mut!(CANVAS) }
@@ -180,16 +191,15 @@ fn pages(bytes: usize) -> u64 {
     (bytes.div_ceil(4096) * 4096) as u64
 }
 
-pub fn init() -> bool {
+pub fn init_size(width: u32, height: u32) -> bool {
     unsafe {
         *core::ptr::addr_of_mut!(POPUP_ACTIVE) = false;
     }
-    let info = match fb::display_info() {
-        Some(info) if info.available && info.width != 0 && info.height != 0 => info,
-        _ => return false,
-    };
+    if width == 0 || height == 0 {
+        return false;
+    }
     let c = main_canvas();
-    let need = info.width as usize * info.height as usize;
+    let need = width as usize * height as usize;
     if c.buf.is_null() || need > c.capacity {
         let bytes = pages(need * 4);
         let first = purec::heap_grow(bytes);
@@ -204,8 +214,8 @@ pub fn init() -> bool {
         }
     }
     c.force = true;
-    c.width = info.width;
-    c.height = info.height;
+    c.width = width;
+    c.height = height;
     c.dirty_x0 = 0;
     c.dirty_y0 = 0;
     c.dirty_x1 = 0;
@@ -213,13 +223,68 @@ pub fn init() -> bool {
     true
 }
 
-pub fn refresh_mode() -> bool {
-    let c = main_canvas();
-    let (w, h) = (c.width, c.height);
-    if !init() {
-        return false;
+/// Show the part (x, y, w, h) of the canvas in a display server window of that size.
+pub fn add_view(window: *mut vb::Window, x: u32, y: u32, w: u32, h: u32) -> bool {
+    unsafe {
+        let count = *core::ptr::addr_of!(VIEW_COUNT);
+        if window.is_null() || count >= MAX_VIEWS {
+            return false;
+        }
+        (*core::ptr::addr_of_mut!(VIEWS))[count] = View { window, x, y, w, h };
+        *core::ptr::addr_of_mut!(VIEW_COUNT) = count + 1;
     }
-    c.width != w || c.height != h
+    invalidate();
+    true
+}
+
+/// Canvas offset of the view or popup that owns `window`.
+pub fn origin_of(window: *mut vb::Window) -> Option<(u32, u32)> {
+    unsafe {
+        let views = &*core::ptr::addr_of!(VIEWS);
+        for view in &views[..*core::ptr::addr_of!(VIEW_COUNT)] {
+            if view.window == window {
+                return Some((view.x, view.y));
+            }
+        }
+        if !window.is_null() && window == *core::ptr::addr_of!(POPUP_WINDOW) {
+            let (x, y, _, _) = *core::ptr::addr_of!(POPUP_RECT);
+            return Some((x, y));
+        }
+    }
+    None
+}
+
+pub fn popup_window() -> *mut vb::Window {
+    unsafe { *core::ptr::addr_of!(POPUP_WINDOW) }
+}
+
+fn present(x0: u32, y0: u32, x1: u32, y1: u32) {
+    let c = main_canvas();
+    let views = unsafe { &*core::ptr::addr_of!(VIEWS) };
+    let count = unsafe { *core::ptr::addr_of!(VIEW_COUNT) };
+    for view in &views[..count] {
+        let vx0 = x0.max(view.x);
+        let vy0 = y0.max(view.y);
+        let vx1 = x1.min(view.x + view.w).min(c.width);
+        let vy1 = y1.min(view.y + view.h).min(c.height);
+        if vx0 >= vx1 || vy0 >= vy1 {
+            continue;
+        }
+        let dst = vb::pixels(view.window);
+        if dst.is_null() {
+            continue;
+        }
+        for row in vy0..vy1 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    c.buf.add(row as usize * c.width as usize + vx0 as usize),
+                    dst.add((row - view.y) as usize * view.w as usize + (vx0 - view.x) as usize),
+                    (vx1 - vx0) as usize,
+                );
+            }
+        }
+        vb::damage(view.window, vx0 - view.x, vy0 - view.y, vx1 - vx0, vy1 - vy0);
+    }
 }
 
 pub fn is_available() -> bool {
@@ -344,8 +409,7 @@ pub fn flush() {
             core::ptr::copy_nonoverlapping(c.buf.add(base), c.shown.add(base), (x1 - x0) as usize);
         }
     }
-    let origin = unsafe { c.buf.add(y0 as usize * stride + x0 as usize) };
-    fb::desktop_blit(origin, c.width, x0, y0, x1 - x0, y1 - y0);
+    present(x0, y0, x1, y1);
 }
 
 const POPUP_MIN_PIXELS: usize = 512 * 640;
@@ -392,30 +456,41 @@ pub fn popup_end() {
     if p.buf.is_null() {
         return;
     }
-    let open = unsafe { *core::ptr::addr_of!(POPUP_OPEN) };
-    if !open {
-        if !fb::window_register(x, y, w, h) {
+    let shown = unsafe { *core::ptr::addr_of!(POPUP_SHOWN) };
+    if popup_is_open() && shown != (x, y, w, h) {
+        popup_close();
+    }
+    if !popup_is_open() {
+        let window = vb::create(x as i32, y as i32, w, h, "popup", vb::ROLE_POPUP);
+        if window.is_null() {
             return;
         }
-        fb::window_set_flags(fb::WINDOW_FLAG_POPUP);
         unsafe {
-            *core::ptr::addr_of_mut!(POPUP_OPEN) = true;
+            *core::ptr::addr_of_mut!(POPUP_WINDOW) = window;
+            *core::ptr::addr_of_mut!(POPUP_SHOWN) = (x, y, w, h);
         }
-    } else {
-        fb::window_update(x, y, w, h);
     }
-    fb::window_blit(p.buf, w, x, y, w, h);
+    let window = popup_window();
+    let dst = vb::pixels(window);
+    if dst.is_null() {
+        return;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(p.buf, dst, w as usize * h as usize) };
+    vb::damage(window, 0, 0, w, h);
 }
+
+static mut POPUP_SHOWN: (u32, u32, u32, u32) = (0, 0, 0, 0);
 
 pub fn popup_close() {
     unsafe {
-        if *core::ptr::addr_of!(POPUP_OPEN) {
-            fb::window_unregister();
-            *core::ptr::addr_of_mut!(POPUP_OPEN) = false;
+        let window = *core::ptr::addr_of!(POPUP_WINDOW);
+        if !window.is_null() {
+            vb::destroy(window);
+            *core::ptr::addr_of_mut!(POPUP_WINDOW) = core::ptr::null_mut();
         }
     }
 }
 
 pub fn popup_is_open() -> bool {
-    unsafe { *core::ptr::addr_of!(POPUP_OPEN) }
+    !popup_window().is_null()
 }

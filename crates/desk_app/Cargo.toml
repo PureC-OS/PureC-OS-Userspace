@@ -1,0 +1,19 @@
+[package]
+name = "desk_app"
+version = "0.1.0"
+edition = "2021"
+description = "Clock, calculator and calendar, each as its own video-backend window"
+
+[dependencies]
+purec = { path = "../purec" }
+vb = { path = "../vb" }
+desk_display = { path = "../desk_display" }
+desk_calc = { path = "../desk_calc" }
+desk_clock = { path = "../desk_clock" }
+desk_calendar = { path = "../desk_calendar" }
+desk_datetime = { path = "../desk_datetime" }
+desk_personal = { path = "../desk_personal" }
+
+[[bin]]
+name = "desk_app"
+path = "src/main.rs"

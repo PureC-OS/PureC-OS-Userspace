@@ -1,0 +1,8 @@
+[package]
+name = "vb"
+version = "0.1.0"
+edition = "2021"
+description = "Bindings to libvb, the client library of the video-backend display server"
+
+[lib]
+crate-type = ["rlib"]
