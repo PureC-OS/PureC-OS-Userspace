@@ -23,7 +23,21 @@ const LAUNCH_COOLDOWN_MS: u64 = 500;
 const TICK_MS: u64 = 100;
 const SLOW_TICK_MS: u64 = 500;
 const POWER_MENU_W: u32 = 150;
-const POWER_MENU_H: u32 = 62;
+const POWER_ROW_H: u32 = 30;
+const LOGIN_PROGRAM: &str = "/usr/bin/qt-login";
+
+fn can_log_out() -> bool {
+    let fd = file_open(LOGIN_PROGRAM);
+    if fd < 0 {
+        return false;
+    }
+    file_close(fd);
+    true
+}
+
+fn power_menu_h() -> u32 {
+    2 + POWER_ROW_H * if can_log_out() { 3 } else { 2 }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Popup {
@@ -113,11 +127,15 @@ fn power_menu_origin() -> (u32, u32) {
 fn draw_power_menu() {
     let th = personal::current_colors();
     let (x, y) = power_menu_origin();
-    disp::draw_rect(x, y, POWER_MENU_W, POWER_MENU_H, th.border);
+    disp::draw_rect(x, y, POWER_MENU_W, power_menu_h(), th.border);
     disp::draw_rect(x + 2, y + 2, POWER_MENU_W - 4, 28, th.window);
     disp::draw_rect(x + 2, y + 32, POWER_MENU_W - 4, 28, th.window);
     disp::draw_text(x + 12, y + 11, "Restart", th.text, th.window);
     disp::draw_text(x + 12, y + 41, "Power off", th.danger, th.window);
+    if can_log_out() {
+        disp::draw_rect(x + 2, y + 62, POWER_MENU_W - 4, 28, th.window);
+        disp::draw_text(x + 12, y + 71, "Log out", th.text, th.window);
+    }
 }
 
 fn draw_desktop() {
@@ -160,7 +178,7 @@ fn draw_popup() {
         }
         Popup::Power => {
             let (x, y) = power_menu_origin();
-            if disp::popup_begin(x, y, POWER_MENU_W, POWER_MENU_H) {
+            if disp::popup_begin(x, y, POWER_MENU_W, power_menu_h()) {
                 draw_power_menu();
                 disp::popup_end();
             }
@@ -309,14 +327,18 @@ fn handle_popup_click(x: i32, y: i32) -> bool {
         }
         Popup::Power => {
             let (px, py) = power_menu_origin();
-            if point_inside(x, y, px, py, POWER_MENU_W, POWER_MENU_H) {
-                let restart = y < (py + 31) as i32;
+            if point_inside(x, y, px, py, POWER_MENU_W, power_menu_h()) {
+                let row = (y - py as i32) / POWER_ROW_H as i32;
                 set_popup(Popup::None);
-                run_action(if restart {
-                    Action::Reboot
-                } else {
-                    Action::Shutdown
-                });
+                match row {
+                    0 => run_action(Action::Reboot),
+                    1 => run_action(Action::Shutdown),
+                    _ => {
+                        dt::save();
+                        vb::disconnect();
+                        purec::exit(0);
+                    }
+                }
                 return true;
             }
             false

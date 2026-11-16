@@ -2,6 +2,7 @@
 Description=PureC OS desktop
 Requires=videod.service
 After=videod.service
+ConditionPathExists=!/usr/bin/qt-login
 
 [Service]
 ExecStart=/usr/bin/desktop-rs
