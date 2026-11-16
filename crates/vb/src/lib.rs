@@ -17,6 +17,7 @@ pub const EVENT_WORKAREA: c_int = 8;
 pub const EVENT_TASK: c_int = 9;
 pub const EVENT_TASK_GONE: c_int = 10;
 pub const EVENT_POPUP_DONE: c_int = 11;
+pub const EVENT_CONFIGURE: c_int = 12;
 
 pub const BUTTON_LEFT: u32 = 1;
 pub const TASK_FOCUSED: u32 = 1;
