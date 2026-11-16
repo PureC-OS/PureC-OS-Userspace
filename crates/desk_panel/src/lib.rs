@@ -11,6 +11,9 @@ unsafe extern "C" {
     fn audio_panel_draw_badge(screen_width: u32);
     fn audio_panel_draw_popup(screen_width: u32);
     fn audio_panel_popup_rect(screen_width: u32, x: *mut u32, y: *mut u32, w: *mut u32, h: *mut u32);
+    fn audio_panel_set_layout(badge_x: u32, badge_y: u32, popup_x: u32, popup_y: u32);
+    fn audio_panel_badge_width() -> u32;
+    fn audio_panel_popup_height() -> u32;
     fn audio_panel_set_popup(visible: bool);
     fn audio_panel_handle_mouse(
         x: i32,
@@ -100,4 +103,16 @@ pub fn popup_rect(screen_width: u32) -> (u32, u32, u32, u32) {
 
 pub fn set_popup(visible: bool) {
     unsafe { audio_panel_set_popup(visible) }
+}
+
+pub fn set_layout(badge_x: u32, badge_y: u32, popup_x: u32, popup_y: u32) {
+    unsafe { audio_panel_set_layout(badge_x, badge_y, popup_x, popup_y) }
+}
+
+pub fn badge_width() -> u32 {
+    unsafe { audio_panel_badge_width() }
+}
+
+pub fn popup_height() -> u32 {
+    unsafe { audio_panel_popup_height() }
 }

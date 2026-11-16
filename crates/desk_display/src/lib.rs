@@ -125,6 +125,58 @@ impl Canvas {
         self.mark(x0 as u32, y0 as u32, x1 as u32, y1 as u32);
     }
 
+    fn mask(&mut self, x: u32, y: u32, size: u32, src: &[u8], src_size: u32, color: u32) {
+        if self.buf.is_null() || size == 0 || src_size == 0 || src.len() < (src_size * src_size) as usize {
+            return;
+        }
+        let lx = x as i64 - self.origin_x as i64;
+        let ly = y as i64 - self.origin_y as i64;
+        let stride = self.width as i64;
+        let (cr, cg, cb) = ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+        let mut touched = false;
+        for dy in 0..size {
+            let py = ly + dy as i64;
+            if py < 0 || py >= self.height as i64 {
+                continue;
+            }
+            let sy0 = dy * src_size / size;
+            let sy1 = ((dy + 1) * src_size / size).max(sy0 + 1).min(src_size);
+            for dx in 0..size {
+                let px = lx + dx as i64;
+                if px < 0 || px >= stride {
+                    continue;
+                }
+                let sx0 = dx * src_size / size;
+                let sx1 = ((dx + 1) * src_size / size).max(sx0 + 1).min(src_size);
+                let mut sum = 0u32;
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        sum += src[(sy * src_size + sx) as usize] as u32;
+                    }
+                }
+                let alpha = sum / ((sy1 - sy0) * (sx1 - sx0));
+                if alpha == 0 {
+                    continue;
+                }
+                let at = (py * stride + px) as usize;
+                let below = unsafe { *self.buf.add(at) };
+                let (br, bg, bb) = ((below >> 16) & 0xFF, (below >> 8) & 0xFF, below & 0xFF);
+                let r = (br * (255 - alpha) + cr * alpha + 127) / 255;
+                let g = (bg * (255 - alpha) + cg * alpha + 127) / 255;
+                let b = (bb * (255 - alpha) + cb * alpha + 127) / 255;
+                unsafe { *self.buf.add(at) = (r << 16) | (g << 8) | b };
+                touched = true;
+            }
+        }
+        if touched {
+            let x0 = lx.max(0) as u32;
+            let y0 = ly.max(0) as u32;
+            let x1 = (lx + size as i64).min(self.width as i64).max(0) as u32;
+            let y1 = (ly + size as i64).min(self.height as i64).max(0) as u32;
+            self.mark(x0, y0, x1, y1);
+        }
+    }
+
     fn glyph_bits(&self, ch: u8, row: u32) -> u8 {
         let ch = (ch & 0x7F) as usize;
         match self.face {
@@ -313,6 +365,9 @@ pub fn draw_text_sized(x: u32, y: u32, text: &str, fg: u32, bg: u32, size: u32) 
 }
 pub fn draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
     canvas().fill(x, y, w, h, color);
+}
+pub fn draw_mask(x: u32, y: u32, size: u32, mask: &[u8], mask_size: u32, color: u32) {
+    canvas().mask(x, y, size, mask, mask_size, color);
 }
 pub fn clear(color: u32) {
     let c = canvas();
