@@ -122,6 +122,7 @@ unsafe extern "C" {
     fn vb_tasks_subscribe();
     fn vb_task_activate(id: u32);
     fn vb_task_minimize(id: u32);
+    fn vb_window_set_state(window: *mut Window, state: c_int);
     fn vb_next_event(event: *mut Event, timeout_ms: c_int) -> c_int;
 }
 
@@ -198,6 +199,15 @@ pub fn task_activate(id: u32) {
 
 pub fn task_minimize(id: u32) {
     unsafe { vb_task_minimize(id) }
+}
+
+pub const STATE_NORMAL: c_int = 0;
+pub const STATE_MAXIMIZED: c_int = 1;
+pub const STATE_FULLSCREEN: c_int = 2;
+pub const STATE_MINIMIZED: c_int = 3;
+
+pub fn set_state(window: *mut Window, state: c_int) {
+    unsafe { vb_window_set_state(window, state) }
 }
 
 pub fn next_event(event: &mut Event, timeout_ms: i32) -> i32 {

@@ -12,6 +12,7 @@ const WIDTH: u32 = 360;
 const HEIGHT: u32 = 270;
 const TITLE_H: u32 = 30;
 const CLOSE_X: u32 = WIDTH - 27;
+const MIN_X: u32 = CLOSE_X - 24;
 const TICK_MS: i32 = 250;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -75,6 +76,8 @@ fn draw(app: App, focused: bool) {
     disp::draw_text(12, 10, app.title(), 0x1E1E2E, title_color);
     disp::draw_rect(CLOSE_X, 6, 18, 18, 0xF38BA8);
     disp::draw_text(CLOSE_X + 4, 10, "x", 0x1E1E2E, 0xF38BA8);
+    disp::draw_rect(MIN_X, 6, 18, 18, 0x1E1E2E);
+    disp::draw_rect(MIN_X + 4, 15, 10, 2, title_color);
     let _ = th;
     app.draw();
     disp::end_update();
@@ -149,7 +152,9 @@ pub extern "C" fn _start() -> ! {
                 if y >= 6 && y < 24 && x >= CLOSE_X as i32 && x < CLOSE_X as i32 + 18 {
                     quit(window);
                 }
-                if y >= 0 && y < TITLE_H as i32 {
+                if y >= 6 && y < 24 && x >= MIN_X as i32 && x < MIN_X as i32 + 18 {
+                    vb::set_state(window, vb::STATE_MINIMIZED);
+                } else if y >= 0 && y < TITLE_H as i32 {
                     vb::start_move(window);
                 }
             }
