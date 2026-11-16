@@ -1,5 +1,5 @@
 #![no_std]
-use purec::fb::uptime_ms;
+use purec::fb::{uptime_ms, wall_clock};
 use purec::{dir_create, file_close, file_open, file_read, file_write};
 const DATETIME_PATH: &str = "/purec/datetime.cfg";
 #[repr(C)]
@@ -21,6 +21,50 @@ static mut CURRENT: Datetime = Datetime {
     second: 0,
 };
 static mut LAST_UPTIME_SECOND: u64 = 0;
+static mut OFFSET_SECONDS: i64 = 0;
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn from_epoch(seconds: i64) -> Datetime {
+    let days = seconds.div_euclid(86400);
+    let rem = seconds.rem_euclid(86400);
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    Datetime {
+        year: year as u16,
+        month: month as u8,
+        day: day as u8,
+        hour: (rem / 3600) as u8,
+        minute: (rem / 60 % 60) as u8,
+        second: (rem % 60) as u8,
+    }
+}
+
+fn to_epoch(dt: &Datetime) -> i64 {
+    days_from_civil(dt.year as i64, dt.month as i64, dt.day as i64) * 86400
+        + dt.hour as i64 * 3600
+        + dt.minute as i64 * 60
+        + dt.second as i64
+}
+
+fn kernel_local() -> Option<i64> {
+    wall_clock().map(|(unix, tz)| unix + tz as i64 * 60)
+}
 fn current_mut() -> &'static mut Datetime {
     unsafe { &mut *core::ptr::addr_of_mut!(CURRENT) }
 }
@@ -170,6 +214,10 @@ pub fn save() {
     file_write(DATETIME_PATH, &text[..19]);
 }
 pub fn init() {
+    if let Some(now) = kernel_local() {
+        *current_mut() = from_epoch(now + unsafe { *core::ptr::addr_of!(OFFSET_SECONDS) });
+        return;
+    }
     let fd = file_open(DATETIME_PATH);
     if fd >= 0 {
         let mut text = [0u8; 20];
@@ -186,6 +234,12 @@ pub fn init() {
     }
 }
 pub fn update() -> bool {
+    if let Some(now) = kernel_local() {
+        let next = from_epoch(now + unsafe { *core::ptr::addr_of!(OFFSET_SECONDS) });
+        let old = *current();
+        *current_mut() = next;
+        return to_epoch(&old) != to_epoch(&next);
+    }
     let uptime_second = uptime_ms() / 1000;
     let mut changed = false;
     unsafe {
@@ -202,6 +256,11 @@ pub fn get() -> Datetime {
     *current()
 }
 pub fn set(dt: &Datetime) -> bool {
+    if let Some(now) = kernel_local() {
+        unsafe {
+            *core::ptr::addr_of_mut!(OFFSET_SECONDS) = to_epoch(dt) - now;
+        }
+    }
     *current_mut() = *dt;
     unsafe {
         *core::ptr::addr_of_mut!(LAST_UPTIME_SECOND) = uptime_ms() / 1000;

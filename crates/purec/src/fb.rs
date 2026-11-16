@@ -70,3 +70,21 @@ pub fn uptime_ms() -> u64 {
     }
 }
 
+
+/// Kernel wall clock: (unix seconds, time zone offset in minutes), None when unset.
+pub fn wall_clock() -> Option<(i64, i32)> {
+    let mut info = TimeInfo {
+        unix_seconds: 0,
+        millis: 0,
+        tz_minutes: 0,
+        uptime_ms: 0,
+        source: 0,
+        reserved: 0,
+    };
+    let result = unsafe { super::syscall(SYS_TIME_GET, &mut info as *mut TimeInfo as u64, 0, 0) };
+    if result < 0 || info.source == 0 || info.unix_seconds <= 0 {
+        None
+    } else {
+        Some((info.unix_seconds, info.tz_minutes))
+    }
+}
