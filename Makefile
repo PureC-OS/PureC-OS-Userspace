@@ -19,7 +19,11 @@ PROFILE_FLAG := --release
 TARGET_DIR := $(CURDIR)/target
 OUT_DIR := $(TARGET_DIR)/$(TARGET)/release
 
-BINS := hello init apps_demo desktop
+BINS := hello desk_app desktop
+VB_DIR := $(BIN_DIR)/video-backend
+LIBVB := $(VB_DIR)/libvb.a
+VERSION := $(shell cat VERSION)
+PKGREL ?= 1
 STAGED := $(BINS:%=$(OUT_DIR)/%)
 
 export RUSTFLAGS := \
@@ -29,16 +33,21 @@ export RUSTFLAGS := \
 	-C link-arg=-T$(LD_SCRIPT) \
 	-C link-arg=$(CXX_OUT_DIR)/audio_panel.o \
 	-C link-arg=$(CXX_OUT_DIR)/ring3.o \
+	-C link-arg=-L$(VB_DIR) \
+	-C link-arg=-l:libvb.a \
 	-C link-arg=-L$(LIB_DIR) \
 	-C link-arg=-l:libpurec.a
 
-.PHONY: all libpurec bins install
+.PHONY: all libpurec libvb bins install package
 all: install
 
 libpurec:
 	$(MAKE) -C $(ROOT_DIR)/src/libc
 
-bins: libpurec $(LD_SCRIPT) $(PANEL_OBJECTS)
+libvb:
+	$(MAKE) -C $(ROOT_DIR)/video-backend
+
+bins: libpurec libvb $(LD_SCRIPT) $(PANEL_OBJECTS)
 	$(CARGO) build $(PROFILE_FLAG) --target $(TARGET)
 
 $(CXX_OUT_DIR)/audio_panel.o: $(CURDIR)/cxx/panel/audio_panel.cpp $(CURDIR)/cxx/panel/audio_panel.h $(CURDIR)/cxx/panel/ring3.h
@@ -52,7 +61,26 @@ $(CXX_OUT_DIR)/ring3.o: $(CURDIR)/cxx/panel/ring3.c $(CURDIR)/cxx/panel/ring3.h
 install: bins
 	@mkdir -p $(PROGRAM_DIR)
 	cp $(OUT_DIR)/hello $(PROGRAM_DIR)/hello-rs
-	cp $(OUT_DIR)/init $(PROGRAM_DIR)/init-rs
-	cp $(OUT_DIR)/apps_demo $(PROGRAM_DIR)/apps-demo-rs
+	cp $(OUT_DIR)/desk_app $(PROGRAM_DIR)/desk-app
 	cp $(OUT_DIR)/desktop $(PROGRAM_DIR)/desktop-rs
-	@echo "staged: $(PROGRAM_DIR)/hello-rs $(PROGRAM_DIR)/init-rs $(PROGRAM_DIR)/apps-demo-rs $(PROGRAM_DIR)/desktop-rs"
+	@echo "staged: $(PROGRAM_DIR)/hello-rs $(PROGRAM_DIR)/desk-app $(PROGRAM_DIR)/desktop-rs"
+
+PKG_OUT := $(BIN_DIR)/repo
+PKG_FILE := $(PKG_OUT)/userspace-$(VERSION)-$(PKGREL)-x86_64.pkg.tar.gz
+SIGN_KEY ?= $(HOME)/.config/purec-pkg/signing.pem
+APP_ENTRIES := clock calc calendar
+
+package: bins
+	@mkdir -p $(PKG_OUT)
+	rm -f $(PKG_OUT)/userspace-*.pkg.tar.gz*
+	python3 $(ROOT_DIR)/mk/pkg/mkpkg.py --name userspace --version $(VERSION)-$(PKGREL) \
+		--desc "PureC OS desktop: shell, panels and applications on video-backend" \
+		--depend "video-backend>=0.2.0" -o $(PKG_OUT) \
+		--file usr/bin/desktop-rs=$(OUT_DIR)/desktop \
+		--file usr/bin/desk-app=$(OUT_DIR)/desk_app \
+		--file usr/bin/hello-rs=$(OUT_DIR)/hello \
+		$(foreach e,$(APP_ENTRIES),--file usr/share/applications/$(e).desktop=$(CURDIR)/desktop_entries/$(e).desktop) \
+		--file usr/lib/init/system/desktop.service=$(CURDIR)/units/desktop.service \
+		--file usr/lib/init/system/graphical.target.wants/desktop.service=$(CURDIR)/units/desktop.service
+	if [ -f "$(SIGN_KEY)" ]; then python3 $(ROOT_DIR)/mk/pkg/pkgsign.py sign $(SIGN_KEY) $(PKG_FILE) $(PKG_FILE).sig; fi
+	@ls -l $(PKG_OUT)/userspace-*
