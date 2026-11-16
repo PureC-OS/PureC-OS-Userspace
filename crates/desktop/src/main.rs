@@ -16,35 +16,18 @@ use taskbar::{Action, BarClick};
 
 const DESK_APP: &str = "/usr/bin/desk-app";
 
-const TOPBAR_HEIGHT: u32 = 28;
+const DESK_TOP: u32 = 8;
 const ICON_W: u32 = 58;
 const ICON_H: u32 = 72;
 const DETACHED_CAP: usize = 8;
 const LAUNCH_COOLDOWN_MS: u64 = 500;
 const TICK_MS: u64 = 100;
 const SLOW_TICK_MS: u64 = 500;
-const POWER_MENU_W: u32 = 150;
-const POWER_ROW_H: u32 = 30;
-const LOGIN_PROGRAM: &str = "/usr/bin/qt-login";
-
-fn can_log_out() -> bool {
-    let fd = file_open(LOGIN_PROGRAM);
-    if fd < 0 {
-        return false;
-    }
-    file_close(fd);
-    true
-}
-
-fn power_menu_h() -> u32 {
-    2 + POWER_ROW_H * if can_log_out() { 3 } else { 2 }
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Popup {
     None,
     Start,
-    Power,
     Audio,
 }
 
@@ -95,12 +78,14 @@ fn sync_wallpaper_path() {
     wallpaper::set_path(&buf[..n]);
 }
 
-fn draw_app_icon(ix: u32, iy: u32, symbol: &str, label_text: &str, color: u32) {
+fn draw_app_icon(ix: u32, iy: u32, symbol: &str, label_text: &str, color: u32, slot: i32) {
     let th = personal::current_colors();
     let label = personal::label_size();
     disp::draw_rect(ix, iy, ICON_W, 50, th.titlebar);
-    disp::draw_rect(ix + 8, iy + 7, 42, 34, color);
-    disp::draw_text_sized(ix + 17, iy + 17, symbol, 0x1E1E2E, color, 12);
+    if !icons::draw(slot, ix + 9, iy + 5, 40, th.accent) {
+        disp::draw_rect(ix + 8, iy + 7, 42, 34, color);
+        disp::draw_text_sized(ix + 17, iy + 17, symbol, 0x1E1E2E, color, 12);
+    }
     disp::draw_text_sized(ix + 4, iy + 55, label_text, th.text, th.desktop, label);
 }
 
@@ -108,34 +93,9 @@ fn draw_icons() {
     for index in 0..entries::count() {
         if let Some(entry) = entries::get(index) {
             if !entry.hidden {
-                draw_app_icon(entry.x, entry.y, entry.icon_text(), entry.name(), entry.color);
+                draw_app_icon(entry.x, entry.y, entry.icon_text(), entry.name(), entry.color, entry.icon_slot);
             }
         }
-    }
-}
-
-fn draw_power_button() {
-    let th = personal::current_colors();
-    let x = screen_w().saturating_sub(38);
-    disp::draw_rect(x, 3, 30, 22, th.border);
-    disp::draw_text(x + 7, 9, "PWR", th.text, th.border);
-}
-
-fn power_menu_origin() -> (u32, u32) {
-    (screen_w().saturating_sub(POWER_MENU_W + 8), TOPBAR_HEIGHT)
-}
-
-fn draw_power_menu() {
-    let th = personal::current_colors();
-    let (x, y) = power_menu_origin();
-    disp::draw_rect(x, y, POWER_MENU_W, power_menu_h(), th.border);
-    disp::draw_rect(x + 2, y + 2, POWER_MENU_W - 4, 28, th.window);
-    disp::draw_rect(x + 2, y + 32, POWER_MENU_W - 4, 28, th.window);
-    disp::draw_text(x + 12, y + 11, "Restart", th.text, th.window);
-    disp::draw_text(x + 12, y + 41, "Power off", th.danger, th.window);
-    if can_log_out() {
-        disp::draw_rect(x + 2, y + 62, POWER_MENU_W - 4, 28, th.window);
-        disp::draw_text(x + 12, y + 71, "Log out", th.text, th.window);
     }
 }
 
@@ -159,11 +119,7 @@ fn draw_desktop() {
     } else {
         disp::clear(th.desktop);
     }
-    disp::draw_rect(0, 0, w, TOPBAR_HEIGHT, th.titlebar);
-    disp::draw_text(12, 8, "PureC OS", th.accent, th.titlebar);
-    panel::draw_badge(w);
     draw_icons();
-    draw_power_button();
     taskbar::draw(w, h, popup() == Popup::Start);
 }
 
@@ -174,13 +130,6 @@ fn draw_popup() {
             let (x, y, w, h) = taskbar::menu_rect(screen_h());
             if disp::popup_begin(x, y, w, h) {
                 taskbar::draw_menu(screen_h());
-                disp::popup_end();
-            }
-        }
-        Popup::Power => {
-            let (x, y) = power_menu_origin();
-            if disp::popup_begin(x, y, POWER_MENU_W, power_menu_h()) {
-                draw_power_menu();
                 disp::popup_end();
             }
         }
@@ -202,6 +151,9 @@ fn set_popup(kind: Popup) {
     unsafe {
         *core::ptr::addr_of_mut!(POPUP) = kind;
     }
+    if kind == Popup::Start {
+        taskbar::menu_reset();
+    }
     if kind != Popup::Audio {
         panel::set_popup(false);
     }
@@ -218,9 +170,7 @@ fn redraw_taskbar() {
 }
 
 fn redraw_badge() {
-    disp::begin_update();
-    panel::draw_badge(screen_w());
-    disp::end_update();
+    redraw_taskbar();
 }
 
 fn draw_all() {
@@ -305,6 +255,11 @@ fn run_action(action: Action) {
     match action {
         Action::None => {}
         Action::Launch(index) => launch_entry(index),
+        Action::Logout => {
+            dt::save();
+            vb::disconnect();
+            purec::exit(0);
+        }
         Action::Reboot => {
             dt::save();
             power(true);
@@ -326,24 +281,6 @@ fn handle_popup_click(x: i32, y: i32) -> bool {
             }
             false
         }
-        Popup::Power => {
-            let (px, py) = power_menu_origin();
-            if point_inside(x, y, px, py, POWER_MENU_W, power_menu_h()) {
-                let row = (y - py as i32) / POWER_ROW_H as i32;
-                set_popup(Popup::None);
-                match row {
-                    0 => run_action(Action::Reboot),
-                    1 => run_action(Action::Shutdown),
-                    _ => {
-                        dt::save();
-                        vb::disconnect();
-                        purec::exit(0);
-                    }
-                }
-                return true;
-            }
-            false
-        }
         _ => false,
     }
 }
@@ -352,7 +289,7 @@ fn clamp_icon(x: i32, y: i32) -> (u32, u32) {
     let max_x = screen_w() as i32 - ICON_W as i32;
     let max_y = screen_h() as i32 - ICON_H as i32 - taskbar::HEIGHT as i32;
     let cx = x.clamp(0, max_x.max(0));
-    let cy = y.clamp(TOPBAR_HEIGHT as i32, max_y.max(TOPBAR_HEIGHT as i32));
+    let cy = y.clamp(DESK_TOP as i32, max_y.max(DESK_TOP as i32));
     (cx as u32, cy as u32)
 }
 
@@ -366,10 +303,14 @@ fn handle_mouse(mouse: Pointer, pressed: bool, released: bool) {
     let wm_consumed = false;
     let mut consumed = false;
 
+    if popup() == Popup::Start && taskbar::menu_hover(mouse.x, mouse.y, screen_h()) {
+        draw_popup();
+    }
+
     if pressed && handle_popup_click(mouse.x, mouse.y) {
         consumed = true;
     }
-    if !consumed && pressed && matches!(popup(), Popup::Start | Popup::Power) {
+    if !consumed && pressed && popup() == Popup::Start {
         set_popup(Popup::None);
     }
 
@@ -399,15 +340,7 @@ fn handle_mouse(mouse: Pointer, pressed: bool, released: bool) {
     }
 
     if !consumed && !wm_consumed && pressed {
-        if point_inside(mouse.x, mouse.y, screen_w().saturating_sub(38), 3, 30, 22) {
-            let next = if popup() == Popup::Power {
-                Popup::None
-            } else {
-                Popup::Power
-            };
-            set_popup(next);
-            consumed = true;
-        } else {
+        {
             match taskbar::bar_click(mouse.x, mouse.y, screen_w(), screen_h()) {
                 BarClick::Start => {
                     let next = if popup() == Popup::Start {
@@ -553,14 +486,12 @@ pub extern "C" fn _start() -> ! {
         purec::exit(1);
     }
     let background = vb::create(0, 0, w, h, "Desktop", vb::ROLE_BACKGROUND);
-    let top = vb::create(0, 0, w, TOPBAR_HEIGHT, "Top bar", vb::ROLE_PANEL);
     let bottom = vb::create(0, (h - taskbar::HEIGHT) as i32, w, taskbar::HEIGHT, "Taskbar", vb::ROLE_PANEL);
-    if background.is_null() || top.is_null() || bottom.is_null() {
+    if background.is_null() || bottom.is_null() {
         purec::write("desktop: cannot create the windows\n");
         purec::exit(1);
     }
     disp::add_view(background, 0, 0, w, h);
-    disp::add_view(top, 0, 0, w, TOPBAR_HEIGHT);
     disp::add_view(bottom, 0, h - taskbar::HEIGHT, w, taskbar::HEIGHT);
     vb::tasks_subscribe();
     dt::init();
