@@ -62,6 +62,9 @@ pub struct Event {
     pub task_id: u32,
     pub task_flags: u32,
     pub title: [u8; 64],
+    pub width: c_int,
+    pub height: c_int,
+    pub state: c_int,
 }
 
 impl Event {
@@ -82,6 +85,9 @@ impl Event {
             task_id: 0,
             task_flags: 0,
             title: [0; 64],
+            width: 0,
+            height: 0,
+            state: 0,
         }
     }
 
