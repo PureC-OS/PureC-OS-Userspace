@@ -2,18 +2,17 @@
 members = [
     "crates/purec",
     "crates/hello",
-    "crates/init",
     "crates/desk_display",
     "crates/desk_calc",
     "crates/desk_datetime",
     "crates/desk_clock",
     "crates/desk_calendar",
-    "crates/desk_apps",
     "crates/desk_personal",
     "crates/desk_panel",
     "crates/desk_wallpaper",
-    "crates/apps_demo",
     "crates/desktop",
+    "crates/vb",
+    "crates/desk_app",
 ]
 resolver = "2"
 

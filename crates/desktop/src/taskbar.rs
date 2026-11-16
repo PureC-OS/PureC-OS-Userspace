@@ -1,9 +1,26 @@
 use crate::entries;
 use desk_display as disp;
 use desk_personal as personal;
-use purec::fb::{
-    battery, uptime_ms, Battery, wm_activate, wm_command, wm_tasks, TaskInfo, CMD_MINIMIZE, TASK_FOCUSED, TASK_MINIMIZED,
-};
+use purec::fb::{battery, uptime_ms, Battery};
+use vb::{TASK_FOCUSED, TASK_MINIMIZED};
+
+#[derive(Clone, Copy)]
+pub struct TaskInfo {
+    pub id: u32,
+    pub flags: u32,
+    pub name: [u8; 64],
+}
+
+impl TaskInfo {
+    const fn empty() -> Self {
+        TaskInfo { id: 0, flags: 0, name: [0; 64] }
+    }
+
+    fn name_str(&self) -> &str {
+        let n = self.name.iter().position(|&b| b == 0).unwrap_or(self.name.len());
+        core::str::from_utf8(&self.name[..n]).unwrap_or("")
+    }
+}
 
 pub const HEIGHT: u32 = 30;
 const START_W: u32 = 86;
@@ -113,10 +130,50 @@ fn point_in(x: i32, y: i32, left: u32, top: u32, w: u32, h: u32) -> bool {
     x >= left as i32 && y >= top as i32 && x < (left + w) as i32 && y < (top + h) as i32
 }
 
+pub fn task_update(id: u32, flags: u32, title: &str) {
+    let table = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let count = unsafe { &mut *core::ptr::addr_of_mut!(TASK_COUNT) };
+    let mut slot = None;
+    for (i, task) in table[..*count].iter().enumerate() {
+        if task.id == id {
+            slot = Some(i);
+        }
+    }
+    let i = match slot {
+        Some(i) => i,
+        None if *count < MAX_TASKS => {
+            *count += 1;
+            *count - 1
+        }
+        None => return,
+    };
+    table[i] = TaskInfo::empty();
+    table[i].id = id;
+    table[i].flags = flags;
+    let n = title.len().min(63);
+    table[i].name[..n].copy_from_slice(&title.as_bytes()[..n]);
+    if flags & TASK_FOCUSED != 0 {
+        for (j, task) in table[..*count].iter_mut().enumerate() {
+            if j != i {
+                task.flags &= !TASK_FOCUSED;
+            }
+        }
+    }
+}
+
+pub fn task_gone(id: u32) {
+    let table = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let count = unsafe { &mut *core::ptr::addr_of_mut!(TASK_COUNT) };
+    if let Some(i) = table[..*count].iter().position(|t| t.id == id) {
+        table.copy_within(i + 1..*count, i);
+        *count -= 1;
+    }
+}
+
 fn signature(list: &[TaskInfo], second: u8) -> u64 {
     let mut hash: u64 = 0xCBF2_9CE4_8422_2325 ^ second as u64;
     for task in list {
-        hash = (hash ^ task.pid as u64).wrapping_mul(0x100_0000_01B3);
+        hash = (hash ^ task.id as u64).wrapping_mul(0x100_0000_01B3);
         hash = (hash ^ task.flags as u64).wrapping_mul(0x100_0000_01B3);
         for &byte in task.name.iter().take_while(|&&b| b != 0) {
             hash = (hash ^ byte as u64).wrapping_mul(0x100_0000_01B3);
@@ -131,11 +188,8 @@ fn clock_text(buffer: &mut [u8; 20]) -> &str {
 }
 
 pub fn poll() -> bool {
-    let table = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
-    let count = wm_tasks(table);
-    unsafe {
-        *core::ptr::addr_of_mut!(TASK_COUNT) = count;
-    }
+    let table = unsafe { &*core::ptr::addr_of!(TASKS) };
+    let count = unsafe { *core::ptr::addr_of!(TASK_COUNT) };
     let mut buffer = [0u8; 20];
     desk_datetime::format(&mut buffer);
     let second = buffer[18];
@@ -321,9 +375,9 @@ pub fn bar_click(x: i32, y: i32, screen_w: u32, screen_h: u32) -> BarClick {
             let focused = task.flags & TASK_FOCUSED != 0;
             let minimized = task.flags & TASK_MINIMIZED != 0;
             if focused && !minimized {
-                wm_command(task.pid, CMD_MINIMIZE);
+                vb::task_minimize(task.id);
             } else {
-                wm_activate(task.pid);
+                vb::task_activate(task.id);
             }
             return BarClick::Handled;
         }

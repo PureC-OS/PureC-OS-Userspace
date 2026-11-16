@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 purec = { path = "../purec" }
 desk_display = { path = "../desk_display" }
-desk_apps = { path = "../desk_apps" }
+vb = { path = "../vb" }
 desk_personal = { path = "../desk_personal" }
 desk_panel = { path = "../desk_panel" }
 desk_wallpaper = { path = "../desk_wallpaper" }

@@ -4,18 +4,16 @@
 mod entries;
 mod taskbar;
 
-use desk_apps as apps;
+use desk_datetime as dt;
 use desk_display as disp;
 use desk_panel as panel;
 use desk_personal as personal;
 use desk_wallpaper as wallpaper;
-use purec::fb::mouse_get;
-use purec::fb::{desktop_claim, desktop_wait, uptime_ms, WAIT_KEY, WAIT_MOUSE, WAIT_REDRAW};
-use purec::fb::{wm_has_focus, wm_pointer, wm_request_repaint, wm_set_work_area};
-use purec::{
-    exec, file_close, file_open, reboot, shutdown, try_get_special, try_getchar, wait,
-};
+use purec::fb::uptime_ms;
+use purec::{exec, exec_with_args, file_close, file_open, reboot, shutdown, wait};
 use taskbar::{Action, BarClick};
+
+const DESK_APP: &str = "/usr/bin/desk-app";
 
 const TOPBAR_HEIGHT: u32 = 28;
 const ICON_W: u32 = 58;
@@ -39,7 +37,7 @@ static mut POPUP: Popup = Popup::None;
 static mut SCREEN_W: u32 = 0;
 static mut SCREEN_H: u32 = 0;
 static mut DETACHED: [i32; DETACHED_CAP] = [0; DETACHED_CAP];
-static mut PREV_BUTTONS: u8 = 0;
+static mut BUTTONS: u8 = 0;
 static mut DRAGGED_ICON: i32 = -1;
 static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
@@ -209,9 +207,6 @@ fn redraw_badge() {
 fn draw_all() {
     disp::begin_update();
     draw_desktop();
-    if apps::is_visible() {
-        apps::draw();
-    }
     disp::end_update();
     draw_popup();
 }
@@ -225,12 +220,12 @@ fn install_present() -> bool {
     true
 }
 
-fn run_detached(path: &str) -> i32 {
+fn run_detached(path: &str, args: &str) -> i32 {
     unsafe {
         let slots = &mut *core::ptr::addr_of_mut!(DETACHED);
         for slot in slots.iter_mut() {
             if *slot <= 0 {
-                let pid = exec(path);
+                let pid = if args.is_empty() { exec(path) } else { exec_with_args(path, args) };
                 if pid >= 0 {
                     *slot = pid;
                 }
@@ -258,10 +253,7 @@ fn reap_detached() {
     }
     if finished {
         entries::set_installer_visible(!install_present());
-        disp::invalidate();
         draw_all();
-        taskbar::poll();
-        wm_request_repaint(0);
     }
 }
 
@@ -279,16 +271,15 @@ fn launch_entry(index: usize) {
     };
     let exec_path = entry.exec();
     if !exec_path.is_empty() {
-        run_detached(exec_path);
+        run_detached(exec_path, "");
         return;
     }
-    let app = match entry.builtin() {
-        "clock" => apps::APP_CLOCK,
-        "calc" => apps::APP_CALCULATOR,
-        "calendar" => apps::APP_CALENDAR,
-        _ => return,
-    };
-    apps::open(app, screen_w(), screen_h());
+    match entry.builtin() {
+        name @ ("clock" | "calc" | "calendar") => {
+            run_detached(DESK_APP, name);
+        }
+        _ => {}
+    }
 }
 
 fn run_action(action: Action) {
@@ -296,12 +287,12 @@ fn run_action(action: Action) {
         Action::None => {}
         Action::Launch(index) => launch_entry(index),
         Action::Reboot => {
-            apps::save_time();
-            reboot();
+            dt::save();
+            power(true);
         }
         Action::Shutdown => {
-            apps::save_time();
-            shutdown();
+            dt::save();
+            power(false);
         }
     }
 }
@@ -342,18 +333,14 @@ fn clamp_icon(x: i32, y: i32) -> (u32, u32) {
     (cx as u32, cy as u32)
 }
 
-fn handle_mouse() {
-    let mouse = match mouse_get() {
-        Some(m) => m,
-        None => return,
-    };
-    let prev = unsafe { *core::ptr::addr_of!(PREV_BUTTONS) };
-    let pressed = (mouse.buttons & 1) != 0 && (prev & 1) == 0;
-    let released = (mouse.buttons & 1) == 0 && (prev & 1) != 0;
-    unsafe {
-        *core::ptr::addr_of_mut!(PREV_BUTTONS) = mouse.buttons;
-    }
-    let (wm_consumed, _) = wm_pointer(mouse.x, mouse.y, mouse.buttons);
+struct Pointer {
+    x: i32,
+    y: i32,
+    buttons: u8,
+}
+
+fn handle_mouse(mouse: Pointer, pressed: bool, released: bool) {
+    let wm_consumed = false;
     let mut consumed = false;
 
     if pressed && handle_popup_click(mouse.x, mouse.y) {
@@ -418,23 +405,6 @@ fn handle_mouse() {
         }
     }
 
-    if !consumed && !wm_consumed && apps::is_visible() {
-        let mut app_redraw = false;
-        consumed = apps::handle_mouse(
-            mouse.x,
-            mouse.y,
-            mouse.buttons,
-            pressed,
-            released,
-            screen_w(),
-            screen_h(),
-            &mut app_redraw,
-        );
-        if app_redraw {
-            draw_all();
-        }
-    }
-
     if pressed && !consumed && !wm_consumed {
         for index in 0..entries::count() {
             let Some(entry) = entries::get(index) else {
@@ -481,87 +451,119 @@ fn handle_mouse() {
     }
 }
 
-fn handle_keyboard() {
-    if wm_has_focus() {
+fn handle_key(event: &vb::Event) {
+    if !event.pressed {
         return;
     }
-    loop {
-        let c = try_getchar();
-        if c < 0 {
-            break;
+    let (_, special) = vb::translate_key(event.key, event.mods);
+    if special != 0 && panel::handle_special_key(special) {
+        redraw_badge();
+        if popup() == Popup::Audio {
+            draw_popup();
         }
-        apps::handle_key(c as u8);
     }
-    loop {
-        let key = try_get_special();
-        if key < 0 {
-            break;
-        }
-        if panel::handle_special_key(key as u8) {
-            redraw_badge();
-            if popup() == Popup::Audio {
-                draw_popup();
+}
+
+fn power(restart: bool) -> ! {
+    let verb = if restart { "reboot" } else { "poweroff" };
+    let pid = exec_with_args("/bin/systemctl", verb);
+    if pid >= 0 {
+        let mut status = 0;
+        wait(pid, Some(&mut status), false);
+        purec::sleep_ms(3000);
+    }
+    if restart {
+        reboot();
+    }
+    shutdown();
+}
+
+fn handle_event(event: &vb::Event) {
+    match event.kind {
+        vb::EVENT_POINTER | vb::EVENT_ENTER => {
+            let Some((ox, oy)) = disp::origin_of(event.window) else {
+                return;
+            };
+            let buttons = event.buttons as u8;
+            unsafe {
+                *core::ptr::addr_of_mut!(BUTTONS) = buttons;
             }
+            let pointer = Pointer { x: event.x + ox as i32, y: event.y + oy as i32, buttons };
+            handle_mouse(pointer, event.left_pressed(), event.left_released());
         }
+        vb::EVENT_KEY => handle_key(event),
+        vb::EVENT_TASK => {
+            taskbar::task_update(event.task_id, event.task_flags, event.title_str());
+            redraw_taskbar();
+        }
+        vb::EVENT_TASK_GONE => {
+            taskbar::task_gone(event.task_id);
+            redraw_taskbar();
+        }
+        vb::EVENT_POPUP_DONE => {
+            if popup() == Popup::Audio {
+                panel::set_popup(false);
+            }
+            set_popup(Popup::None);
+        }
+        vb::EVENT_DISCONNECT => purec::exit(1),
+        _ => {}
     }
-}
-
-fn update_work_area() {
-    let w = disp::width();
-    let h = disp::height();
-    let reserved = TOPBAR_HEIGHT + taskbar::HEIGHT;
-    wm_set_work_area(0, TOPBAR_HEIGHT, w, h.saturating_sub(reserved));
-}
-
-fn reload_mode() {
-    disp::refresh_mode();
-    update_work_area();
-    disp::invalidate();
-    draw_all();
-    wm_request_repaint(0);
 }
 
 #[no_mangle]
 #[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
-    purec::write("desktop: Ring-3 desktop starting\n");
-    if !disp::init() || disp::width() < 320 || disp::height() < 240 {
-        purec::write("desktop: no usable framebuffer\n");
+    purec::write("desktop: starting\n");
+    let mut tries = 0;
+    while !vb::connect() {
+        tries += 1;
+        if tries > 50 {
+            purec::write("desktop: videod is not running\n");
+            purec::exit(1);
+        }
+        purec::sleep_ms(100);
+    }
+    let (w, h) = vb::screen_size();
+    if w < 320 || h < 240 || !disp::init_size(w, h) {
+        purec::write("desktop: screen too small\n");
         purec::exit(1);
     }
-    if !desktop_claim() {
-        purec::write("desktop: session claim refused (boot with desktop=rs)\n");
+    let background = vb::create(0, 0, w, h, "Desktop", vb::ROLE_BACKGROUND);
+    let top = vb::create(0, 0, w, TOPBAR_HEIGHT, "Top bar", vb::ROLE_PANEL);
+    let bottom = vb::create(0, (h - taskbar::HEIGHT) as i32, w, taskbar::HEIGHT, "Taskbar", vb::ROLE_PANEL);
+    if background.is_null() || top.is_null() || bottom.is_null() {
+        purec::write("desktop: cannot create the windows\n");
         purec::exit(1);
     }
-    update_work_area();
-    apps::init();
+    disp::add_view(background, 0, 0, w, h);
+    disp::add_view(top, 0, 0, w, TOPBAR_HEIGHT);
+    disp::add_view(bottom, 0, h - taskbar::HEIGHT, w, taskbar::HEIGHT);
+    vb::tasks_subscribe();
+    dt::init();
     personal::poll();
     sync_wallpaper_path();
     panel::init();
     entries::rescan();
     entries::set_installer_visible(!install_present());
-    run_detached("/bin/program/login");
     taskbar::poll();
     draw_all();
+    disp::flush();
     let mut last_tick = uptime_ms();
     let mut last_slow = last_tick;
+    let mut event = vb::Event::empty();
     loop {
-        let events = desktop_wait(50);
-        if events & WAIT_REDRAW != 0 {
-            reload_mode();
-        }
-        if events & WAIT_MOUSE != 0 {
-            handle_mouse();
-        }
-        if events & WAIT_KEY != 0 {
-            handle_keyboard();
+        if vb::next_event(&mut event, TICK_MS as i32) > 0 {
+            handle_event(&event);
+            while vb::next_event(&mut event, 0) > 0 {
+                handle_event(&event);
+            }
         }
         let now = uptime_ms();
         if now.wrapping_sub(last_tick) >= TICK_MS {
             last_tick = now;
             reap_detached();
-            apps::update();
-            handle_keyboard();
+            dt::update();
             if taskbar::poll() {
                 redraw_taskbar();
             }
