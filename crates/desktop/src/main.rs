@@ -44,6 +44,35 @@ static mut LAST_LAUNCH_MS: u64 = 0;
 static mut WP_PATH: [u8; 128] = [0; 128];
 static mut WP_PATH_LEN: usize = 0;
 static mut WP_SYNCED: bool = false;
+static mut BACKGROUND: *mut vb::Window = core::ptr::null_mut();
+static mut BAR: *mut vb::Window = core::ptr::null_mut();
+
+fn setup_windows(w: u32, h: u32) -> bool {
+    unsafe {
+        for slot in [core::ptr::addr_of_mut!(BACKGROUND), core::ptr::addr_of_mut!(BAR)] {
+            if !(*slot).is_null() {
+                vb::destroy(*slot);
+                *slot = core::ptr::null_mut();
+            }
+        }
+    }
+    disp::clear_views();
+    if w < 320 || h < 240 || !disp::init_size(w, h) {
+        return false;
+    }
+    let background = vb::create(0, 0, w, h, "Desktop", vb::ROLE_BACKGROUND);
+    let bottom = vb::create(0, (h - taskbar::HEIGHT) as i32, w, taskbar::HEIGHT, "Taskbar", vb::ROLE_PANEL);
+    if background.is_null() || bottom.is_null() {
+        return false;
+    }
+    disp::add_view(background, 0, 0, w, h);
+    disp::add_view(bottom, 0, h - taskbar::HEIGHT, w, taskbar::HEIGHT);
+    unsafe {
+        *core::ptr::addr_of_mut!(BACKGROUND) = background;
+        *core::ptr::addr_of_mut!(BAR) = bottom;
+    }
+    true
+}
 
 fn popup() -> Popup {
     unsafe { *core::ptr::addr_of!(POPUP) }
@@ -462,6 +491,16 @@ fn handle_event(event: &vb::Event) {
             }
             set_popup(Popup::None);
         }
+        vb::EVENT_SCREEN if event.width > 0 && event.height > 0 => {
+            unsafe {
+                *core::ptr::addr_of_mut!(POPUP) = Popup::None;
+            }
+            panel::set_popup(false);
+            if !setup_windows(event.width as u32, event.height as u32) {
+                purec::exit(1);
+            }
+            draw_all();
+        }
         vb::EVENT_DISCONNECT => purec::exit(1),
         _ => {}
     }
@@ -481,18 +520,10 @@ pub extern "C" fn _start() -> ! {
         purec::sleep_ms(100);
     }
     let (w, h) = vb::screen_size();
-    if w < 320 || h < 240 || !disp::init_size(w, h) {
-        purec::write("desktop: screen too small\n");
-        purec::exit(1);
-    }
-    let background = vb::create(0, 0, w, h, "Desktop", vb::ROLE_BACKGROUND);
-    let bottom = vb::create(0, (h - taskbar::HEIGHT) as i32, w, taskbar::HEIGHT, "Taskbar", vb::ROLE_PANEL);
-    if background.is_null() || bottom.is_null() {
+    if !setup_windows(w, h) {
         purec::write("desktop: cannot create the windows\n");
         purec::exit(1);
     }
-    disp::add_view(background, 0, 0, w, h);
-    disp::add_view(bottom, 0, h - taskbar::HEIGHT, w, taskbar::HEIGHT);
     vb::tasks_subscribe();
     dt::init();
     personal::poll();

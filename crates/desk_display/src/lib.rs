@@ -275,6 +275,13 @@ pub fn init_size(width: u32, height: u32) -> bool {
     true
 }
 
+pub fn clear_views() {
+    popup_close();
+    unsafe {
+        *core::ptr::addr_of_mut!(VIEW_COUNT) = 0;
+    }
+}
+
 /// Show the part (x, y, w, h) of the canvas in a display server window of that size.
 pub fn add_view(window: *mut vb::Window, x: u32, y: u32, w: u32, h: u32) -> bool {
     unsafe {
