@@ -8,7 +8,7 @@ const DIR_CAPACITY: usize = 64;
 const FILE_MAX: usize = 4096;
 const GRID_X0: u32 = 40;
 const GRID_DX: u32 = 72;
-const GRID_Y0: u32 = 48;
+const GRID_Y0: u32 = 20;
 const GRID_DY: u32 = 82;
 const GRID_PER_ROW: u32 = 6;
 
@@ -191,7 +191,9 @@ pub fn parse(data: &[u8]) -> Option<Entry> {
         } else if eq_ignore_case(key, "Builtin") {
             entry.builtin_len = copy_field(&mut entry.builtin, value);
         } else if eq_ignore_case(key, "Icon") {
-            entry.icon_len = copy_field(&mut entry.icon, value);
+            let base = value.iter().rposition(|&b| b == b'/').map_or(value, |i| &value[i + 1..]);
+            let base = base.strip_suffix(b".icn").unwrap_or(base);
+            entry.icon_len = copy_field(&mut entry.icon, base);
         } else if eq_ignore_case(key, "IconColor") || eq_ignore_case(key, "Color") {
             if let Some(color) = parse_color(value) {
                 entry.color = color;
