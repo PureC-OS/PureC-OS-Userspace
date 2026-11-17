@@ -290,7 +290,7 @@ pub fn click(px: i32, py: i32, rect: (u32, u32, u32, u32)) -> Option<Action> {
             if s.wifi.connected && n.ssid == s.wifi.ssid {
                 Action::None
             } else if n.security != net::SECURITY_OPEN {
-                s.message = "Secured network: connect in Settings";
+                s.message = "Secured: connect in Settings";
                 Action::None
             } else {
                 Action::Connect(i)

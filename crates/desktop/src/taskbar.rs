@@ -1,6 +1,6 @@
-use crate::{entries, icons};
+use crate::{entries, icons, network};
 use desk_panel as panel;
-use purec::{file_close, file_open};
+use purec::{file_close, file_open, getenv};
 use desk_display as disp;
 use desk_personal as personal;
 use purec::fb::{battery, uptime_ms, Battery};
@@ -25,7 +25,7 @@ impl TaskInfo {
 }
 
 pub const HEIGHT: u32 = 38;
-const START_W: u32 = 100;
+const START_W: u32 = 40;
 const TASK_W: u32 = 128;
 const TASK_GAP: u32 = 4;
 const TRAY_W: u32 = 84;
@@ -35,7 +35,9 @@ const MENU_W: u32 = 288;
 const MENU_ROW_H: u32 = 36;
 const MENU_MAX_ROWS: u32 = 12;
 const MENU_HEADER_H: u32 = 40;
-const MENU_FOOTER_H: u32 = 50;
+const MENU_FOOTER_H: u32 = 52;
+const FOOTER_BUTTON: u32 = 34;
+const FOOTER_GAP: u32 = 4;
 const MENU_PAD: u32 = 4;
 const MENU_ICON: u32 = 28;
 const AUDIO_BADGE_H: u32 = 22;
@@ -114,10 +116,10 @@ fn draw_battery(x: u32, y: u32, state: Battery) {
     let th = personal::current_colors();
     let bg = th.border;
     disp::draw_rect(x, y + 4, BATTERY_W, HEIGHT - 8, bg);
-    let bx = x + 6;
-    let by = y + 10;
     let bw = 18;
     let bh = 10;
+    let bx = x + 6;
+    let by = y + (HEIGHT - bh) / 2;
     disp::draw_rect(bx, by, bw, 1, th.text);
     disp::draw_rect(bx, by + bh - 1, bw, 1, th.text);
     disp::draw_rect(bx, by, 1, bh, th.text);
@@ -137,7 +139,7 @@ fn draw_battery(x: u32, y: u32, state: Battery) {
     }
     let mut buffer = [0u8; 8];
     let text = battery_text(state, &mut buffer);
-    disp::draw_text(bx + bw + 6, y + 11, text, th.text, bg);
+    disp::draw_text(bx + bw + 6, y + (HEIGHT - 8) / 2, text, th.text, bg);
 }
 
 fn tasks() -> &'static [TaskInfo] {
@@ -205,14 +207,14 @@ fn clock_text(buffer: &mut [u8; 20]) -> &str {
     core::str::from_utf8(&buffer[11..19]).unwrap_or("")
 }
 
-pub fn poll() -> bool {
+pub fn poll(network_open: bool) -> bool {
     let table = unsafe { &*core::ptr::addr_of!(TASKS) };
     let count = unsafe { *core::ptr::addr_of!(TASK_COUNT) };
     let mut buffer = [0u8; 20];
     desk_datetime::format(&mut buffer);
     let second = buffer[18];
     poll_battery();
-    let mut current = signature(&table[..count], second);
+    let mut current = signature(&table[..count], second) ^ network::poll(network_open);
     if let Some(state) = battery_state() {
         current ^= ((state.percent as u64) << 40) ^ ((state.charging as u64) << 48);
     }
@@ -234,6 +236,7 @@ fn truncate<'a>(text: &'a str, max_chars: usize) -> &'a str {
 struct Tray {
     clock_x: u32,
     battery_x: Option<u32>,
+    network_x: u32,
     volume_x: u32,
     tasks_end: u32,
 }
@@ -247,8 +250,13 @@ fn tray_layout(screen_w: u32) -> Tray {
     } else {
         None
     };
-    let volume_x = cursor.saturating_sub(panel::badge_width() + 4);
-    Tray { clock_x, battery_x, volume_x, tasks_end: volume_x.saturating_sub(4) }
+    let network_x = cursor.saturating_sub(network::SLOT_W + 4);
+    let volume_x = network_x.saturating_sub(panel::badge_width() + 4);
+    Tray { clock_x, battery_x, network_x, volume_x, tasks_end: volume_x.saturating_sub(4) }
+}
+
+pub fn network_popup_rect(screen_w: u32, screen_h: u32) -> (u32, u32, u32, u32) {
+    network::popup_rect(tray_layout(screen_w).network_x, screen_h.saturating_sub(HEIGHT), screen_w)
 }
 
 fn apply_audio_layout(screen_w: u32, screen_h: u32) {
@@ -260,7 +268,7 @@ fn apply_audio_layout(screen_w: u32, screen_h: u32) {
     panel::set_layout(tray.volume_x, badge_y, popup_x, popup_y);
 }
 
-pub fn draw(screen_w: u32, screen_h: u32, menu_open: bool) {
+pub fn draw(screen_w: u32, screen_h: u32, menu_open: bool, network_open: bool) {
     let th = personal::current_colors();
     let y = screen_h.saturating_sub(HEIGHT);
     disp::draw_rect(0, y, screen_w, HEIGHT, th.titlebar);
@@ -268,11 +276,11 @@ pub fn draw(screen_w: u32, screen_h: u32, menu_open: bool) {
     let start_bg = if menu_open { th.accent } else { th.border };
     let start_fg = if menu_open { th.window } else { th.text };
     disp::draw_rect(4, y + 4, START_W, HEIGHT - 8, start_bg);
-    let start_icon = icons::load("desktop-rs");
-    if !icons::draw(start_icon, 12, y + 8, 22, start_fg) {
-        disp::draw_rect(12, y + 10, 18, 18, start_fg);
+    let size = 22;
+    let start_icon = icons::load("start");
+    if !icons::draw(start_icon, 4 + (START_W - size) / 2, y + (HEIGHT - size) / 2, size, start_fg) {
+        disp::draw_rect(4 + (START_W - 16) / 2, y + (HEIGHT - 16) / 2, 16, 16, start_fg);
     }
-    disp::draw_text(42, y + 15, "Start", start_fg, start_bg);
 
     let tray = tray_layout(screen_w);
     let mut x = 4 + START_W + 8;
@@ -298,6 +306,7 @@ pub fn draw(screen_w: u32, screen_h: u32, menu_open: bool) {
 
     apply_audio_layout(screen_w, screen_h);
     panel::draw_badge(screen_w);
+    network::draw_slot(tray.network_x, y, HEIGHT, network_open);
     if let (Some(battery_x), Some(state)) = (tray.battery_x, battery_state()) {
         draw_battery(battery_x, y, state);
     }
@@ -500,6 +509,7 @@ pub fn menu_click(x: i32, y: i32, screen_h: u32) -> Option<Action> {
 
 pub enum BarClick {
     Start,
+    Network,
     Handled,
     Outside,
 }
@@ -513,6 +523,9 @@ pub fn bar_click(x: i32, y: i32, screen_w: u32, screen_h: u32) -> BarClick {
         return BarClick::Start;
     }
     let tray = tray_layout(screen_w);
+    if point_in(x, y, tray.network_x, top + 4, network::SLOT_W, HEIGHT - 8) {
+        return BarClick::Network;
+    }
     let mut bx = 4 + START_W + 8;
     for task in tasks() {
         if bx + TASK_W > tray.tasks_end {
