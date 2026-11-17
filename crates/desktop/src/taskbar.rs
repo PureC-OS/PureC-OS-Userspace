@@ -40,7 +40,7 @@ const MENU_PAD: u32 = 4;
 const MENU_ICON: u32 = 28;
 const AUDIO_BADGE_H: u32 = 22;
 const AUDIO_POPUP_W: u32 = 198;
-const LOGIN_PROGRAM: &str = "/usr/bin/qt-login";
+const LOGIN_PROGRAM: &str = "/usr/bin/login";
 const MAX_TASKS: usize = 16;
 
 pub enum Action {
