@@ -20,3 +20,8 @@ Mapping (desktop entry -> Material Symbol):
   puzzle15    extension           2048        grid_view
   settings    settings            tetris      sports_esports
   pl          code                desktop-rs  desktop_windows
+
+Panel and menu icons (start, wifi-*, ethernet, net-off, power, restart,
+logout, account, refresh) are Material Design Icons by Pictogrammers
+(Apache-2.0), taken from the JetBrains Mono Nerd Font glyphs and rasterized
+by tools/gen_glyph_icons.py.
