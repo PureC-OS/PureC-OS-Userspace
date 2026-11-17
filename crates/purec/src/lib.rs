@@ -1,5 +1,6 @@
 #![no_std]
 pub mod fb;
+pub mod net;
 use core::ffi::{c_char, c_int, c_void};
 unsafe extern "C" {
     fn pc_syscall(number: u64, arg1: u64, arg2: u64, arg3: u64) -> i64;
