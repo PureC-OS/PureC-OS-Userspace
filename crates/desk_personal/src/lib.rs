@@ -5,6 +5,7 @@ use purec::{file_close, file_open, file_read, syscall};
 
 const SYS_SET_FONT_FACE: u64 = 107;
 const CONFIG_PATH: &str = "/config/appear.ini";
+const CONFIG_NAME: &str = "appear.ini";
 const POLL_MS: u64 = 500;
 
 #[derive(Clone, Copy)]
@@ -191,7 +192,12 @@ fn load_into(p: &mut Personal) {
     set_str(&mut p.font, &mut p.font_len, b"clean");
     p.font_size = 8;
 
-    let fd = file_open(CONFIG_PATH);
+    let mut path_buf = [0u8; 160];
+    let path = match purec::config_path(CONFIG_NAME, &mut path_buf, false) {
+        Some(n) => core::str::from_utf8(&path_buf[..n]).unwrap_or(CONFIG_PATH),
+        None => CONFIG_PATH,
+    };
+    let fd = file_open(path);
     if fd < 0 {
         unsafe {
             *core::ptr::addr_of_mut!(HAD_CONFIG) = false;

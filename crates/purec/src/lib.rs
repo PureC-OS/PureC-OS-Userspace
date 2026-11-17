@@ -34,6 +34,7 @@ unsafe extern "C" {
     fn pc_shutdown();
     fn pc_exit(status: i32) -> !;
     fn pc_heap_grow(size: u64) -> i64;
+    fn pc_config_path(name: *const c_char, out: *mut c_char, capacity: u32, for_write: bool) -> i32;
 }
 pub mod sys {
     pub const WRITE: u64 = 1;
@@ -293,3 +294,16 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 #[allow(dead_code)]
 fn _use_c_int(_: c_int) {}
+
+pub fn config_path(name: &str, out: &mut [u8], for_write: bool) -> Option<usize> {
+    let mut cname = [0u8; 64];
+    if name.len() >= cname.len() || out.len() < 2 {
+        return None;
+    }
+    cname[..name.len()].copy_from_slice(name.as_bytes());
+    let rc = unsafe { pc_config_path(cname.as_ptr() as *const c_char, out.as_mut_ptr() as *mut c_char, out.len() as u32, for_write) };
+    if rc < 0 {
+        return None;
+    }
+    Some(out.iter().position(|&b| b == 0).unwrap_or(out.len()))
+}
