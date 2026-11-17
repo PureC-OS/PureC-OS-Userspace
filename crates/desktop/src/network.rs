@@ -290,7 +290,7 @@ pub fn click(px: i32, py: i32, rect: (u32, u32, u32, u32)) -> Option<Action> {
             if s.wifi.connected && n.ssid == s.wifi.ssid {
                 Action::None
             } else if n.security != net::SECURITY_OPEN {
-                s.message = "Secured network: use Settings";
+                s.message = "Secured network: connect in Settings";
                 Action::None
             } else {
                 Action::Connect(i)
@@ -319,7 +319,7 @@ pub fn run(action: Action) {
             s.message = "";
         }
         Action::Scan => {
-            s.message = if net::wifi_scan() < 0 { "Cannot scan while connected" } else { "Scanning..." };
+            s.message = if net::wifi_scan() < 0 { "Disconnect first to scan" } else { "Scanning..." };
         }
     }
     refresh(true);
@@ -364,7 +364,11 @@ pub fn draw_popup(rect: (u32, u32, u32, u32)) {
     }
     disp::draw_text(x + 58, top + 32, core::str::from_utf8(&line[..n]).unwrap_or(""), th.muted_text, th.window);
     disp::draw_rect(x + 8, top + STATUS_H - 2, w - 16, 1, th.border);
-    disp::draw_text(x + 14, top + STATUS_H + 8, "Wi-Fi networks", th.muted_text, th.window);
+    if s.message.is_empty() {
+        disp::draw_text(x + 14, top + STATUS_H + 8, "Wi-Fi networks", th.muted_text, th.window);
+    } else {
+        disp::draw_text(x + 14, top + STATUS_H + 8, truncate(s.message, 34), th.accent, th.window);
+    }
 
     let lt = list_top(y);
     if !s.wifi.device {
@@ -391,9 +395,6 @@ pub fn draw_popup(rect: (u32, u32, u32, u32)) {
 
     let ft = footer_top(y);
     disp::draw_rect(x + 8, ft, w - 16, 1, th.border);
-    if !s.message.is_empty() {
-        disp::draw_text(x + 14, ft + 18, truncate(s.message, 16), th.muted_text, th.window);
-    }
     let ((sx, sy), disconnect) = buttons(rect);
     if s.wifi.device {
         let active = s.hover == Some(Hit::Scan);
