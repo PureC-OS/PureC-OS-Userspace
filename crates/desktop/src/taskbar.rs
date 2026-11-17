@@ -332,11 +332,44 @@ fn app_rows() -> u32 {
     visible_entries().min(MENU_MAX_ROWS)
 }
 
+static mut LOGOUT_AVAILABLE: bool = false;
+static mut USER_NAME: [u8; 32] = [0; 32];
+static mut USER_LEN: usize = 0;
+
 fn footer_buttons() -> u32 {
-    if can_log_out() {
+    if unsafe { *core::ptr::addr_of!(LOGOUT_AVAILABLE) } {
         3
     } else {
         2
+    }
+}
+
+fn user_name() -> &'static str {
+    unsafe {
+        let name = &*core::ptr::addr_of!(USER_NAME);
+        core::str::from_utf8(&name[..*core::ptr::addr_of!(USER_LEN)]).unwrap_or("")
+    }
+}
+
+fn load_session_info() {
+    unsafe {
+        *core::ptr::addr_of_mut!(LOGOUT_AVAILABLE) = can_log_out();
+        let name = &mut *core::ptr::addr_of_mut!(USER_NAME);
+        *name = [0; 32];
+        let len = if getenv("USER", &mut name[..31]) >= 0 {
+            name.iter().position(|&b| b == 0).unwrap_or(31)
+        } else {
+            0
+        };
+        *core::ptr::addr_of_mut!(USER_LEN) = len;
+    }
+}
+
+fn footer_action(count: u32, index: u32) -> Action {
+    match (count, index) {
+        (3, 0) => Action::Logout,
+        (3, 1) | (2, 0) => Action::Reboot,
+        _ => Action::Shutdown,
     }
 }
 
@@ -363,11 +396,10 @@ fn footer_top(my: u32) -> u32 {
     my + MENU_PAD + MENU_HEADER_H + app_rows() * MENU_ROW_H
 }
 
-fn footer_geometry(mx: u32, mw: u32, count: u32, index: u32) -> (u32, u32) {
-    let gap = 6;
-    let inner = mw - 16;
-    let width = (inner - gap * (count - 1)) / count;
-    (mx + 8 + index * (width + gap), width)
+fn footer_button(mx: u32, mw: u32, footer: u32, count: u32, index: u32) -> (u32, u32) {
+    let after = count - index;
+    let x = mx + mw - 10 - after * FOOTER_BUTTON - (after - 1) * FOOTER_GAP;
+    (x, footer + (MENU_FOOTER_H - FOOTER_BUTTON) / 2 + 1)
 }
 
 fn hit_test(x: i32, y: i32, screen_h: u32) -> Option<Hit> {
@@ -395,13 +427,11 @@ fn hit_test(x: i32, y: i32, screen_h: u32) -> Option<Hit> {
         return Some(Hit::Dead);
     }
     let footer = footer_top(my);
-    if y >= footer as i32 + 8 && y < (footer + 8 + 32) as i32 {
-        let count = footer_buttons();
-        for index in 0..count {
-            let (bx, bw) = footer_geometry(mx, mw, count, index);
-            if point_in(x, y, bx, footer + 8, bw, 32) {
-                return Some(Hit::Footer(index));
-            }
+    let count = footer_buttons();
+    for index in 0..count {
+        let (bx, by) = footer_button(mx, mw, footer, count, index);
+        if point_in(x, y, bx, by, FOOTER_BUTTON, FOOTER_BUTTON) {
+            return Some(Hit::Footer(index));
         }
     }
     Some(Hit::Dead)
@@ -422,6 +452,7 @@ pub fn menu_hover(x: i32, y: i32, screen_h: u32) -> bool {
 }
 
 pub fn menu_reset() {
+    load_session_info();
     unsafe {
         *core::ptr::addr_of_mut!(HOVER) = None;
     }
@@ -468,15 +499,24 @@ pub fn draw_menu(screen_h: u32) {
 
     let footer = footer_top(my);
     disp::draw_rect(mx + 8, footer + 2, mw - 16, 1, th.border);
+    let account = icons::load("account");
+    let icon_y = footer + 2 + (MENU_FOOTER_H - 2 - 24) / 2;
+    if !icons::draw(account, mx + 12, icon_y, 24, th.accent) {
+        disp::draw_rect(mx + 16, icon_y + 4, 16, 16, th.accent);
+    }
+    let name = user_name();
+    let name = if name.is_empty() { "PureC OS" } else { name };
     let count = footer_buttons();
+    let (first_x, _) = footer_button(mx, mw, footer, count, 0);
+    let max_chars = (first_x.saturating_sub(mx + 46) / 8) as usize;
+    disp::draw_text(mx + 44, icon_y + 8, truncate(name, max_chars), th.text, th.window);
     for index in 0..count {
-        let (bx, bw) = footer_geometry(mx, mw, count, index);
-        let label = match (count, index) {
-            (3, 0) => "Log out",
-            (3, 1) | (2, 0) => "Restart",
-            _ => "Power off",
+        let (bx, by) = footer_button(mx, mw, footer, count, index);
+        let (icon_name, danger) = match footer_action(count, index) {
+            Action::Logout => ("logout", false),
+            Action::Reboot => ("restart", false),
+            _ => ("power", true),
         };
-        let danger = label == "Power off";
         let selected = hovered == Some(Hit::Footer(index));
         let bg = if selected { if danger { th.danger } else { th.accent } } else { th.border };
         let fg = if selected {
@@ -486,23 +526,19 @@ pub fn draw_menu(screen_h: u32) {
         } else {
             th.text
         };
-        disp::draw_rect(bx, footer + 8, bw, 32, bg);
-        let text_w = label.len() as u32 * 8;
-        disp::draw_text(bx + bw.saturating_sub(text_w) / 2, footer + 8 + 12, label, fg, bg);
+        disp::draw_rect(bx, by, FOOTER_BUTTON, FOOTER_BUTTON, bg);
+        let size = 20;
+        let slot = icons::load(icon_name);
+        if !icons::draw(slot, bx + (FOOTER_BUTTON - size) / 2, by + (FOOTER_BUTTON - size) / 2, size, fg) {
+            disp::draw_rect(bx + 10, by + 10, 14, 14, fg);
+        }
     }
 }
 
 pub fn menu_click(x: i32, y: i32, screen_h: u32) -> Option<Action> {
     match hit_test(x, y, screen_h)? {
         Hit::App(index, _) => Some(Action::Launch(index)),
-        Hit::Footer(index) => {
-            let count = footer_buttons();
-            Some(match (count, index) {
-                (3, 0) => Action::Logout,
-                (3, 1) | (2, 0) => Action::Reboot,
-                _ => Action::Shutdown,
-            })
-        }
+        Hit::Footer(index) => Some(footer_action(footer_buttons(), index)),
         Hit::Dead => Some(Action::None),
     }
 }
@@ -544,4 +580,16 @@ pub fn bar_click(x: i32, y: i32, screen_w: u32, screen_h: u32) -> BarClick {
         bx += TASK_W + TASK_GAP;
     }
     BarClick::Handled
+}
+
+pub fn bar_click_kind(x: i32, y: i32, screen_w: u32, screen_h: u32) -> Option<BarClick> {
+    let top = screen_h.saturating_sub(HEIGHT);
+    if point_in(x, y, 4, top + 4, START_W, HEIGHT - 8) {
+        return Some(BarClick::Start);
+    }
+    let tray = tray_layout(screen_w);
+    if point_in(x, y, tray.network_x, top + 4, network::SLOT_W, HEIGHT - 8) {
+        return Some(BarClick::Network);
+    }
+    None
 }

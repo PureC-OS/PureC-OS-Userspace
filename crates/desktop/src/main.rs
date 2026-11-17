@@ -3,6 +3,7 @@
 
 mod entries;
 mod icons;
+mod network;
 mod taskbar;
 
 use desk_datetime as dt;
@@ -15,6 +16,7 @@ use purec::{exec, exec_with_args, file_close, file_open, reboot, shutdown, wait}
 use taskbar::{Action, BarClick};
 
 const DESK_APP: &str = "/usr/bin/desk-app";
+const DEFAULT_WALLPAPER: &[u8] = b"/usr/share/wallpapers/wp07.png";
 
 const DESK_TOP: u32 = 8;
 const ICON_W: u32 = 58;
@@ -29,6 +31,7 @@ enum Popup {
     None,
     Start,
     Audio,
+    Network,
 }
 
 static mut POPUP: Popup = Popup::None;
@@ -92,7 +95,11 @@ fn point_inside(px: i32, py: i32, left: u32, top: u32, w: u32, h: u32) -> bool {
 
 fn sync_wallpaper_path() {
     let mut buf = [0u8; 128];
-    let n = personal::wallpaper_path_copy(&mut buf);
+    let mut n = personal::wallpaper_path_copy(&mut buf);
+    if n == 0 {
+        buf[..DEFAULT_WALLPAPER.len()].copy_from_slice(DEFAULT_WALLPAPER);
+        n = DEFAULT_WALLPAPER.len();
+    }
     unsafe {
         let cur = &*core::ptr::addr_of!(WP_PATH);
         let cur_len = *core::ptr::addr_of!(WP_PATH_LEN);
@@ -149,7 +156,7 @@ fn draw_desktop() {
         disp::clear(th.desktop);
     }
     draw_icons();
-    taskbar::draw(w, h, popup() == Popup::Start);
+    taskbar::draw(w, h, popup() == Popup::Start, popup() == Popup::Network);
 }
 
 fn draw_popup() {
@@ -159,6 +166,13 @@ fn draw_popup() {
             let (x, y, w, h) = taskbar::menu_rect(screen_h());
             if disp::popup_begin(x, y, w, h) {
                 taskbar::draw_menu(screen_h());
+                disp::popup_end();
+            }
+        }
+        Popup::Network => {
+            let rect = taskbar::network_popup_rect(screen_w(), screen_h());
+            if disp::popup_begin(rect.0, rect.1, rect.2, rect.3) {
+                network::draw_popup(rect);
                 disp::popup_end();
             }
         }
@@ -183,18 +197,21 @@ fn set_popup(kind: Popup) {
     if kind == Popup::Start {
         taskbar::menu_reset();
     }
+    if kind == Popup::Network {
+        network::open();
+    }
     if kind != Popup::Audio {
         panel::set_popup(false);
     }
     draw_popup();
-    if previous == Popup::Start || kind == Popup::Start {
+    if previous == Popup::Start || kind == Popup::Start || previous == Popup::Network || kind == Popup::Network {
         redraw_taskbar();
     }
 }
 
 fn redraw_taskbar() {
     disp::begin_update();
-    taskbar::draw(screen_w(), screen_h(), popup() == Popup::Start);
+    taskbar::draw(screen_w(), screen_h(), popup() == Popup::Start, popup() == Popup::Network);
     disp::end_update();
 }
 
@@ -310,6 +327,22 @@ fn handle_popup_click(x: i32, y: i32) -> bool {
             }
             false
         }
+        Popup::Network => {
+            let rect = taskbar::network_popup_rect(screen_w(), screen_h());
+            let Some(action) = network::click(x, y, rect) else {
+                return false;
+            };
+            if let network::Action::Connect(_) = action {
+                network::connecting_message();
+                draw_popup();
+                disp::flush();
+            }
+            network::run(action);
+            taskbar::poll(true);
+            redraw_taskbar();
+            draw_popup();
+            true
+        }
         _ => false,
     }
 }
@@ -335,11 +368,18 @@ fn handle_mouse(mouse: Pointer, pressed: bool, released: bool) {
     if popup() == Popup::Start && taskbar::menu_hover(mouse.x, mouse.y, screen_h()) {
         draw_popup();
     }
+    if popup() == Popup::Network
+        && network::hover(mouse.x, mouse.y, taskbar::network_popup_rect(screen_w(), screen_h()))
+    {
+        draw_popup();
+    }
 
     if pressed && handle_popup_click(mouse.x, mouse.y) {
         consumed = true;
     }
-    if !consumed && pressed && popup() == Popup::Start {
+    let network_slot = pressed
+        && matches!(taskbar::bar_click_kind(mouse.x, mouse.y, screen_w(), screen_h()), Some(BarClick::Network));
+    if !consumed && pressed && (popup() == Popup::Start || (popup() == Popup::Network && !network_slot)) {
         set_popup(Popup::None);
     }
 
@@ -380,8 +420,17 @@ fn handle_mouse(mouse: Pointer, pressed: bool, released: bool) {
                     set_popup(next);
                     consumed = true;
                 }
+                BarClick::Network => {
+                    let next = if popup() == Popup::Network {
+                        Popup::None
+                    } else {
+                        Popup::Network
+                    };
+                    set_popup(next);
+                    consumed = true;
+                }
                 BarClick::Handled => {
-                    taskbar::poll();
+                    taskbar::poll(popup() == Popup::Network);
                     redraw_taskbar();
                     consumed = true;
                 }
@@ -531,7 +580,8 @@ pub extern "C" fn _start() -> ! {
     panel::init();
     entries::rescan();
     entries::set_installer_visible(!install_present());
-    taskbar::poll();
+    taskbar::menu_reset();
+    taskbar::poll(false);
     draw_all();
     disp::flush();
     let mut last_tick = uptime_ms();
@@ -549,8 +599,11 @@ pub extern "C" fn _start() -> ! {
             last_tick = now;
             reap_detached();
             dt::update();
-            if taskbar::poll() {
+            if taskbar::poll(popup() == Popup::Network) {
                 redraw_taskbar();
+                if popup() == Popup::Network {
+                    draw_popup();
+                }
             }
         }
         if now.wrapping_sub(last_slow) >= SLOW_TICK_MS {

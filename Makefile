@@ -70,19 +70,21 @@ PKG_FILE := $(PKG_OUT)/userspace-$(VERSION)-$(PKGREL)-x86_64.pkg.tar.gz
 SIGN_KEY ?= $(HOME)/.config/purec-pkg/signing.pem
 APP_ENTRIES := clock calc calendar
 ICONS := $(notdir $(wildcard $(CURDIR)/assets/icons/*.icn))
+WALLPAPERS := $(notdir $(wildcard $(CURDIR)/assets/wallpapers/*.png))
 
 package: bins
 	@mkdir -p $(PKG_OUT)
 	rm -f $(PKG_OUT)/userspace-*.pkg.tar.gz*
 	python3 $(ROOT_DIR)/mk/pkg/mkpkg.py --name userspace --version $(VERSION)-$(PKGREL) \
 		--desc "PureC OS desktop: shell, panels and applications on video-backend" \
-		--depend "video-backend>=0.2.0" -o $(PKG_OUT) \
+		--depend "video-backend>=1.2.0" -o $(PKG_OUT) \
 		--file usr/bin/desktop-rs=$(OUT_DIR)/desktop \
 		--file usr/bin/desk-app=$(OUT_DIR)/desk_app \
 		--file usr/bin/hello-rs=$(OUT_DIR)/hello \
 		$(foreach e,$(APP_ENTRIES),--file usr/share/applications/$(e).desktop=$(CURDIR)/desktop_entries/$(e).desktop) \
 		$(foreach i,$(ICONS),--file usr/share/icons/purec/$(i)=$(CURDIR)/assets/icons/$(i)) \
 		--file usr/share/icons/purec/NOTICE=$(CURDIR)/assets/icons/NOTICE \
+		$(foreach w,$(WALLPAPERS),--file usr/share/wallpapers/$(w)=$(CURDIR)/assets/wallpapers/$(w)) \
 		--file usr/lib/init/system/desktop.service=$(CURDIR)/units/desktop.service \
 		--file usr/lib/init/system/graphical.target.wants/desktop.service=$(CURDIR)/units/desktop.service
 	if [ -f "$(SIGN_KEY)" ]; then python3 $(ROOT_DIR)/mk/pkg/pkgsign.py sign $(SIGN_KEY) $(PKG_FILE) $(PKG_FILE).sig; fi
